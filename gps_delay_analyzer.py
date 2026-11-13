@@ -306,6 +306,35 @@ class App(tk.Tk):
             v=tk.StringVar(); self.gps.append(v); ttk.Label(right,text=f'GPS {i+1} 原始文件').grid(row=i+1,column=0,sticky='w'); ttk.Entry(right,textvariable=v,width=75).grid(row=i+1,column=1); ttk.Button(right,text='选择',command=lambda x=v:self.pick(x)).grid(row=i+1,column=2)
         ttk.Label(right,text='对齐容差(ms)').grid(row=4,column=0,sticky='w'); self.tol=tk.StringVar(value='200'); ttk.Entry(right,textvariable=self.tol,width=10).grid(row=4,column=1,sticky='w')
         self.log=tk.Text(right,height=18); self.log.grid(row=6,column=0,columnspan=3,sticky='nsew'); right.rowconfigure(6,weight=1); right.columnconfigure(1,weight=1); ttk.Button(right,text='开始分析并绘图',command=self.run).grid(row=5,column=1,sticky='e',pady=8)
+        self.list.insert('end','RTCM 星历检测')
+        scrollbar=ttk.Scrollbar(left,orient='vertical',command=self.list.yview)
+        scrollbar.pack(side='right',fill='y'); self.list.configure(yscrollcommand=scrollbar.set)
+        self.project_area=right
+        self.eph_area=ttk.Frame(self)
+        ttk.Label(self.eph_area,text='RTCM 星历检测文件').grid(row=0,column=0,padx=8,pady=12)
+        self.eph_path=tk.StringVar()
+        ttk.Entry(self.eph_area,textvariable=self.eph_path,width=70).grid(row=0,column=1,sticky='ew')
+        ttk.Button(self.eph_area,text='选择',command=lambda:self.pick(self.eph_path)).grid(row=0,column=2,padx=8)
+        ttk.Button(self.eph_area,text='解析并绘制星历缺失比例',command=self.run_ephemeris).grid(row=1,column=1,pady=12)
+        ttk.Label(self.eph_area,text='支持含 RTCM3 二进制的日志；按 MSM 时间每 10 秒统计。\n左轴：星历接收缺失比例；右轴：该时间窗观测到的卫星数。\n缺失指本文件中尚未收到该卫星的星历，不代表接收机实际无星历。').grid(row=2,column=0,columnspan=3,sticky='w',padx=8)
+        self.eph_area.columnconfigure(1,weight=1)
+        self.list.bind('<<ListboxSelect>>',self.select_project)
+    def select_project(self,event=None):
+        selection=self.list.curselection()
+        if not selection: return
+        self.project_area.pack_forget(); self.eph_area.pack_forget()
+        area=self.eph_area if selection[0]==1 else self.project_area
+        area.pack(side='right',fill='both',expand=True,padx=8,pady=8)
+    def run_ephemeris(self):
+        try:
+            path=self.eph_path.get().strip()
+            if not path: raise ValueError('请选择需要分析的 RTCM 日志文件')
+            import rtcm_ephemeris
+            if plt is not None:
+                plt.rcParams['font.sans-serif']=['Microsoft YaHei','SimHei','DejaVu Sans']
+                plt.rcParams['axes.unicode_minus']=False
+            rtcm_ephemeris.show(self,path)
+        except Exception as e: messagebox.showerror('星历检测失败',str(e))
     def pick(self,v,ulog=False):
         f=filedialog.askopenfilename(filetypes=[('ULog','*.ulg') if ulog else ('GPS files','*.ubx *.log *.bin *.*'),('所有文件','*.*')]);
         if f:v.set(f)

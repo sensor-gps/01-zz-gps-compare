@@ -36,3 +36,17 @@ The first selected GPS provides the reference timeline when ULog is omitted. Oth
 The current `drone_fusion` support is preliminary. Its yaw units, reference north, coordinate conventions, and mapping from ULog timestamps to GPS iTOW require validation against the flight controller's message definitions. Do not treat its current automatic rotation/time mapping as verified ground truth or a measured GPS latency. GPS-only comparisons do not require ULog.
 
 Raw flight logs and generated CSV files are intentionally excluded from version control.
+
+## RTCM ephemeris inspection
+
+Select the RTCM ephemeris project in the left panel and choose a binary RTCM3 log. `rtcm_ephemeris.py` validates CRC24Q and extracts GPS/GLO/GAL/BDS/QZSS MSM satellite masks and ephemeris satellite IDs.
+
+The chart uses 10-second windows with three series:
+
+- Red line: observed satellites whose ephemeris has not been received in this file by the window end, divided by the observed satellite count.
+- Dashed line: observed satellites without an ephemeris message in that particular window, divided by the observed satellite count.
+- Background bars on the right axis: distinct observed satellites in each window.
+
+GPS MSM epochs anchor the timeline. Other constellation messages and ephemerides are associated with the preceding GPS epoch in file order. Logs without a usable GPS MSM anchor are rejected. This is an approximate file-order association, not an independent reception timestamp.
+
+Previously received ephemerides count as present; validity, health and receiver caches from before the recording are not evaluated. The dashed series indicates message transmission coverage and does not imply an invalid ephemeris. Window statistics are exported to `analysis_output/<filename>.ephemeris.csv`.
