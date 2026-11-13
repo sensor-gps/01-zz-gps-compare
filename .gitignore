@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+analysis_output/
+.venv/
+venv/
+*.log
+*.ubx
+*.ulg
+*.bin
