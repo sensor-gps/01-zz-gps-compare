@@ -319,6 +319,18 @@ class App(tk.Tk):
         ttk.Label(self.eph_area,text='支持含 RTCM3 二进制的日志；按 MSM 时间每 10 秒统计。\n左轴：星历接收缺失比例；右轴：该时间窗观测到的卫星数。\n缺失指本文件中尚未收到该卫星的星历，不代表接收机实际无星历。').grid(row=2,column=0,columnspan=3,sticky='w',padx=8)
         self.eph_area.columnconfigure(1,weight=1)
         self.list.bind('<<ListboxSelect>>',self.select_project)
+        options=ttk.Frame(right); options.grid(row=7,column=0,columnspan=3,sticky='ew',pady=6)
+        self.fusion_frame=tk.StringVar(value='body')
+        ttk.Label(options,text='fusion 速度坐标：').grid(row=0,column=0)
+        ttk.Radiobutton(options,text='机体系 FRD',variable=self.fusion_frame,value='body').grid(row=0,column=1)
+        ttk.Radiobutton(options,text='局部世界系（Z向下）',variable=self.fusion_frame,value='local').grid(row=0,column=2)
+        self.north_confirmed=tk.BooleanVar(value=False)
+        ttk.Checkbutton(options,text='已确认 fusion_gps.yaw 为真北航向（角度）',variable=self.north_confirmed).grid(row=1,column=0,columnspan=3,sticky='w')
+        self.anchor_boot=tk.StringVar(); self.anchor_tow=tk.StringVar()
+        ttk.Label(options,text='时间锚 ULog timestamp (µs)：').grid(row=2,column=0)
+        ttk.Entry(options,textvariable=self.anchor_boot,width=20).grid(row=2,column=1)
+        ttk.Label(options,text='对应 GPS iTOW (ms)：').grid(row=3,column=0)
+        ttk.Entry(options,textvariable=self.anchor_tow,width=20).grid(row=3,column=1)
     def select_project(self,event=None):
         selection=self.list.curselection()
         if not selection: return
@@ -345,7 +357,10 @@ class App(tk.Tk):
         try:
             if plt is None: raise RuntimeError('请先安装 matplotlib：pip install matplotlib')
             ref_path=self.ref.get().strip()
-            ref=parse_ulog(ref_path) if ref_path else None
+            if ref_path:
+                from fusion_reference import load
+                ref=load(ref_path,self.anchor_boot.get(),self.anchor_tow.get(),self.fusion_frame.get(),self.north_confirmed.get())
+            else: ref=None
             selected=[(i+1,v.get().strip()) for i,v in enumerate(self.gps) if v.get().strip()]
             gps=[parse_gps(path) for _,path in selected]
             if not gps: raise RuntimeError('至少选择一个 GPS 文件')
@@ -356,6 +371,8 @@ class App(tk.Tk):
             tol=float(self.tol.get())
             if not np.isfinite(tol) or tol<0: raise ValueError('对齐容差必须是非负有限数值')
             aligned=[align(reference,x,tol) for x in gps]
+            if ref is not None and not any(aligned):
+                raise ValueError(f'GPS 与 fusion 的 iTOW 无重叠，请检查时间锚点。fusion 范围 {min(ref)}～{max(ref)} ms')
             mode='ULog 真值' if ref is not None else f'GPS {selected[0][0]} 时间轴（未提供真值）'
             self.log.insert('end',f'参考：{mode}\n')
             for (number,_),data,rows in zip(selected,gps,aligned):
