@@ -15,6 +15,28 @@ def estimate_delay(reference, gps, max_ms=2000, step_ms=10):
         scores.append((-float(np.sum(a*b)/(np.linalg.norm(a)*np.linalg.norm(b)+1e-12)),delay))
     score,delay=min(scores); return float(delay),float(-score)
 
+def estimate_channel_delay(reference, gps, channel, max_ms=2000, step_ms=10):
+    """Estimate one scalar channel delay by centered normalized correlation."""
+    rt=np.array(sorted(reference),float)
+    rv=np.array([reference[t].get(channel,np.nan) for t in rt],float)
+    gt=np.array(sorted(gps),float)
+    gv=np.array([gps[t].get(channel,np.nan) for t in gt],float)
+    goodr=np.isfinite(rv); goodg=np.isfinite(gv)
+    rt,rv=rt[goodr],rv[goodr]; gt,gv=gt[goodg],gv[goodg]
+    if len(rt)<20 or len(gt)<20: return np.nan,np.nan,np.nan
+    best=(-np.inf,np.nan,np.nan)
+    for delay in range(-max_ms,max_ms+1,step_ms):
+        q=np.interp(rt+delay,gt,gv,left=np.nan,right=np.nan)
+        ok=np.isfinite(q)
+        if ok.sum()<20: continue
+        a=rv[ok]-rv[ok].mean(); b=q[ok]-q[ok].mean()
+        den=np.linalg.norm(a)*np.linalg.norm(b)
+        if den<1e-12: continue
+        corr=float(np.sum(a*b)/den)
+        rmse=float(np.sqrt(np.mean((q[ok]-rv[ok])**2)))
+        if corr>best[0]: best=(corr,float(delay),rmse)
+    return best[1],best[0],best[2]
+
 def estimate_clock_offset(reference, gps, max_s=120.0, step_s=0.25):
     """Use horizontal speed signatures to find the large FFC/GPS clock offset."""
     rt=np.array(sorted(reference),float); rs=np.array([np.hypot(reference[t].get('vel_n',np.nan),reference[t].get('vel_e',np.nan)) for t in rt])
