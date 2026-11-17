@@ -81,12 +81,25 @@ def parse_gps(path):
         raise RuntimeError(f'未提取到校验通过且定位有效的 UBX NAV-PVT：{path}')
     export_dir=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'analysis_output')
     os.makedirs(export_dir,exist_ok=True)
+    # 接收机内部可能以 50 Hz 重复输出同一 PVT；原始导航解算频率按 10 Hz
+    # 统计，因此每 100 ms 时间格只保留一条最接近格点的记录。
+    records=decimate_pvt_10hz(records)
     export_path=os.path.join(export_dir,os.path.basename(path)+'.pvt.csv')
     with open(export_path,'w',newline='',encoding='utf-8-sig') as f:
-        writer=csv.DictWriter(f,fieldnames=('itow_ms',)+FIELDS)
+        writer=csv.DictWriter(f,fieldnames=('itow_ms','_source_itow_ms')+FIELDS)
         writer.writeheader()
         for t,row in sorted(records.items()): writer.writerow(dict(itow_ms=t,**row))
     return records
+
+def decimate_pvt_10hz(records):
+    if not records: return records
+    grouped={}
+    for tow,row in records.items():
+        bucket=int(round(tow/100.0))*100
+        old=grouped.get(bucket)
+        if old is None or abs(tow-bucket)<abs(old[0]-bucket): grouped[bucket]=(tow,row)
+    out={int(bucket):dict(item[1],_source_itow_ms=int(item[0])) for bucket,item in grouped.items()}
+    return dict(sorted(out.items()))
 
 def parse_ulog(path):
     try:
@@ -392,10 +405,14 @@ class App(tk.Tk):
             if not np.isfinite(tol) or tol<0: raise ValueError('对齐容差必须是非负有限数值')
             aligned=[align(reference,x,tol) for x in gps]
             if ref is not None:
-                from gps_timing import estimate_delay
+                from gps_timing import estimate_delay, estimate_channel_delay
                 for (number,path),data in zip(selected,gps):
                     delay,score=estimate_delay(ref,data)
                     text=f'GPS {number}: NE lag={delay:.0f} ms, correlation={score:.5f}\n'
+                    for channel,label in (('vel_n','速度 N'),('vel_e','速度 E'),('vel_d','速度 D'),('speed','水平速度'),('pos_n','位置 N'),('pos_e','位置 E'),('pos_d','位置 D')):
+                        ch_delay,ch_corr,ch_rmse=estimate_channel_delay(ref,data,channel)
+                        if np.isfinite(ch_delay):
+                            text+=f'  {label}: lag={ch_delay:.0f} ms, corr={ch_corr:.5f}, RMSE={ch_rmse:.6g}\n'
                     self.after(0,lambda text=text:self.log.insert('end',text))
             if ref is not None and not any(aligned):
                 raise ValueError(f'GPS 与 fusion 的 iTOW 无重叠，请检查时间锚点。fusion 范围 {min(ref)}～{max(ref)} ms')
