@@ -1,6 +1,7 @@
 __pycache__/
 *.py[cod]
 analysis_output/
+.gps_delay_history.json
 .venv/
 venv/
 *.log

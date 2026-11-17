@@ -1,10 +1,10 @@
-"""GPS iTOW/PVT 对齐与延迟分析 GUI。
+﻿"""GPS iTOW/PVT 对齐与延迟分析 GUI。
 
 依赖: Python 3, matplotlib；读取 ULog 真值还需要 pyulog (pip install pyulog)。
 运行: python gps_delay_analyzer.py
 """
 from __future__ import annotations
-import os, re, struct, threading, csv
+import os, re, struct, threading, csv, json
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import numpy as np
@@ -166,7 +166,7 @@ def show_comparison(parent, reference, ref, selected, aligned):
         curves=[]
         source_times=[]
         if ref is not None:
-            times=np.array(sorted(ref)); curves.append(('VIO/ULog',(times-origin)/1000,np.array([ref[t].get(field,np.nan) for t in times])))
+            times=np.array(sorted(ref)); curves.append(('FFC 真值',(times-origin)/1000,np.array([ref[t].get(field,np.nan) for t in times])))
             source_times.append(times)
         for (_,path),rows in zip(selected,aligned):
             curves.append((os.path.splitext(os.path.basename(path))[0],
@@ -236,7 +236,7 @@ def show_comparison(parent, reference, ref, selected, aligned):
                     j=int(np.argmin(np.abs(x-time)))
                     samples.append((name,int(original[j])))
                 lines.append(f'{"AB"[slot]} 最近采样点原始时间（ms，非插值交点时间）：'+ '； '.join(f'{name}={stamp}' for name,stamp in samples))
-                gps_samples=samples[1:] if has_ref and samples and samples[0][0]=='VIO/ULog' else samples
+                gps_samples=samples[1:] if has_ref and samples and samples[0][0]=='FFC 真值' else samples
                 for j,(name,stamp) in enumerate(gps_samples):
                     for other,other_stamp in gps_samples[j+1:]:
                         lines.append(f'{"AB"[slot]} ΔiTOW [{other} − {name}] = {other_stamp-stamp:+d} ms')
@@ -298,9 +298,10 @@ def show_comparison(parent, reference, ref, selected, aligned):
 class App(tk.Tk):
     def __init__(self):
         super().__init__(); self.title('GPS 延迟分析（iTOW/PVT）'); self.geometry('1000x620'); self.items=[]
+        self.config_path=os.path.join(os.path.dirname(os.path.abspath(__file__)),'.gps_delay_history.json')
         left=ttk.Frame(self); left.pack(side='left',fill='y',padx=8,pady=8); right=ttk.Frame(self); right.pack(side='right',fill='both',expand=True,padx=8,pady=8)
         ttk.Label(left,text='分析项目').pack(anchor='w'); self.list=tk.Listbox(left,width=24,height=12); self.list.pack(fill='y',expand=True); self.list.insert(0,'GPS 延迟分析（iTOW/PVT）'); self.list.selection_set(0)
-        ttk.Label(right,text='参考真值 ULog').grid(row=0,column=0,sticky='w'); self.ref=tk.StringVar(); ttk.Entry(right,textvariable=self.ref,width=75).grid(row=0,column=1); ttk.Button(right,text='选择',command=lambda:self.pick(self.ref,True)).grid(row=0,column=2)
+        ttk.Label(right,text='VIO 真值 ffc.csv').grid(row=0,column=0,sticky='w'); self.ref=tk.StringVar(); ttk.Entry(right,textvariable=self.ref,width=75).grid(row=0,column=1); ttk.Button(right,text='选择',command=lambda:self.pick(self.ref,'ulog')).grid(row=0,column=2)
         self.gps=[]
         for i in range(3):
             v=tk.StringVar(); self.gps.append(v); ttk.Label(right,text=f'GPS {i+1} 原始文件').grid(row=i+1,column=0,sticky='w'); ttk.Entry(right,textvariable=v,width=75).grid(row=i+1,column=1); ttk.Button(right,text='选择',command=lambda x=v:self.pick(x)).grid(row=i+1,column=2)
@@ -319,18 +320,10 @@ class App(tk.Tk):
         ttk.Label(self.eph_area,text='支持含 RTCM3 二进制的日志；按 MSM 时间每 10 秒统计。\n左轴：星历接收缺失比例；右轴：该时间窗观测到的卫星数。\n缺失指本文件中尚未收到该卫星的星历，不代表接收机实际无星历。').grid(row=2,column=0,columnspan=3,sticky='w',padx=8)
         self.eph_area.columnconfigure(1,weight=1)
         self.list.bind('<<ListboxSelect>>',self.select_project)
-        options=ttk.Frame(right); options.grid(row=7,column=0,columnspan=3,sticky='ew',pady=6)
-        self.fusion_frame=tk.StringVar(value='body')
-        ttk.Label(options,text='fusion 速度坐标：').grid(row=0,column=0)
-        ttk.Radiobutton(options,text='机体系 FRD',variable=self.fusion_frame,value='body').grid(row=0,column=1)
-        ttk.Radiobutton(options,text='局部世界系（Z向下）',variable=self.fusion_frame,value='local').grid(row=0,column=2)
-        self.north_confirmed=tk.BooleanVar(value=False)
-        ttk.Checkbutton(options,text='已确认 fusion_gps.yaw 为真北航向（角度）',variable=self.north_confirmed).grid(row=1,column=0,columnspan=3,sticky='w')
+        self.fusion_frame=tk.StringVar(value='local')
+        self.north_confirmed=tk.BooleanVar(value=True)
         self.anchor_boot=tk.StringVar(); self.anchor_tow=tk.StringVar()
-        ttk.Label(options,text='时间锚 ULog timestamp (µs)：').grid(row=2,column=0)
-        ttk.Entry(options,textvariable=self.anchor_boot,width=20).grid(row=2,column=1)
-        ttk.Label(options,text='对应 GPS iTOW (ms)：').grid(row=3,column=0)
-        ttk.Entry(options,textvariable=self.anchor_tow,width=20).grid(row=3,column=1)
+        self.load_history(); self.protocol('WM_DELETE_WINDOW',self.on_close)
     def select_project(self,event=None):
         selection=self.list.curselection()
         if not selection: return
@@ -347,43 +340,78 @@ class App(tk.Tk):
                 plt.rcParams['axes.unicode_minus']=False
             rtcm_ephemeris.show(self,path)
         except Exception as e: messagebox.showerror('星历检测失败',str(e))
-    def pick(self,v,ulog=False):
-        f=filedialog.askopenfilename(filetypes=[('ULog','*.ulg') if ulog else ('GPS files','*.ubx *.log *.bin *.*'),('所有文件','*.*')]);
+    def pick(self,v,kind='gps'):
+        filetypes=[('所有文件','*.*')] if kind=='ffc' else [('GPS files','*.ubx *.log *.bin *.*'),('所有文件','*.*')]
+        f=filedialog.askopenfilename(filetypes=filetypes);
         if f:v.set(f)
+    def load_history(self):
+        try:
+            with open(self.config_path,encoding='utf-8') as f: d=json.load(f)
+            saved_ref=d.get('ref','')
+            self.ref.set(saved_ref if str(saved_ref).lower().endswith(('.ulg','.ulog')) else '')
+            for v,p in zip(self.gps,d.get('gps',[])): v.set(p)
+            self.tol.set(str(d.get('tol','200'))); self.fusion_frame.set(d.get('fusion_frame','local'))
+            self.north_confirmed.set(bool(d.get('north_confirmed',False)))
+            self.anchor_boot.set(str(d.get('anchor_boot',''))); self.anchor_tow.set(str(d.get('anchor_tow','')))
+            self.eph_path.set(d.get('eph_path',''))
+        except (OSError,ValueError,TypeError,json.JSONDecodeError): pass
+    def save_history(self):
+        d={'ref':self.ref.get(),'gps':[v.get() for v in self.gps],'tol':self.tol.get(),
+           'fusion_frame':self.fusion_frame.get(),'north_confirmed':self.north_confirmed.get(),
+           'anchor_boot':self.anchor_boot.get(),'anchor_tow':self.anchor_tow.get(),'eph_path':self.eph_path.get()}
+        try:
+            with open(self.config_path,'w',encoding='utf-8') as f: json.dump(d,f,ensure_ascii=False,indent=2)
+        except OSError: pass
+    def on_close(self): self.save_history(); self.destroy()
     def run(self):
-        # 在 Tk 主线程读取输入，绘图也留在主线程。
-        self._run()
+        if getattr(self,'_running',False): return
+        self.save_history()
+        self._running=True
+        self.log.insert('end','正在后台解析文件，请稍候，界面仍可响应……\n')
+        threading.Thread(target=self._run,daemon=True).start()
     def _run(self):
         try:
             if plt is None: raise RuntimeError('请先安装 matplotlib：pip install matplotlib')
             ref_path=self.ref.get().strip()
-            if ref_path:
-                from fusion_reference import load
-                ref=load(ref_path,self.anchor_boot.get(),self.anchor_tow.get(),self.fusion_frame.get(),self.north_confirmed.get())
-            else: ref=None
+            if ref_path and not ref_path.lower().endswith(('.ulg','.ulog')):
+                raise ValueError('?? GPS ??????? ULog ?????? .ulg ????? ffc.csv ??????')
+            from fusion_reference import load
+            ref=None
             selected=[(i+1,v.get().strip()) for i,v in enumerate(self.gps) if v.get().strip()]
             gps=[parse_gps(path) for _,path in selected]
             if not gps: raise RuntimeError('至少选择一个 GPS 文件')
             for (number,path),data in zip(selected,gps):
                 if not data: raise RuntimeError(f'GPS {number} 未解析到有效数据：{path}')
+            if ref_path:
+                if not self.gps[0].get().strip(): raise ValueError('GPS1 is required as the sensor_gps clock anchor')
+                ref=load(ref_path,gps1=gps[0])
+                self.after(0,lambda:self.log.insert('end','ULog sensor_gps -> GPS1 PVT identity clock mapping; GPS2/3 share iTOW.\n'))
             reference=ref if ref is not None else gps[0]
             if not reference: raise RuntimeError('参考文件中没有可分析的数据')
             tol=float(self.tol.get())
             if not np.isfinite(tol) or tol<0: raise ValueError('对齐容差必须是非负有限数值')
             aligned=[align(reference,x,tol) for x in gps]
+            if ref is not None:
+                from gps_timing import estimate_delay
+                for (number,path),data in zip(selected,gps):
+                    delay,score=estimate_delay(ref,data)
+                    text=f'GPS {number}: NE lag={delay:.0f} ms, correlation={score:.5f}\n'
+                    self.after(0,lambda text=text:self.log.insert('end',text))
             if ref is not None and not any(aligned):
                 raise ValueError(f'GPS 与 fusion 的 iTOW 无重叠，请检查时间锚点。fusion 范围 {min(ref)}～{max(ref)} ms')
-            mode='ULog 真值' if ref is not None else f'GPS {selected[0][0]} 时间轴（未提供真值）'
-            self.log.insert('end',f'参考：{mode}\n')
+            mode='ULog drone_fusion NED' if ref is not None else 'GPS only'
+            self.after(0,lambda: self.log.insert('end',f'参考：{mode}\n'))
             for (number,_),data,rows in zip(selected,gps,aligned):
-                self.log.insert('end',f'GPS {number}：{len(data)} 点，匹配 {len(rows)} 点\n')
+                self.after(0,lambda number=number,data=data,rows=rows: self.log.insert('end',f'GPS {number}：{len(data)} 点，匹配 {len(rows)} 点\n'))
             plt.rcParams['font.sans-serif']=['Microsoft YaHei','SimHei','DejaVu Sans']
             plt.rcParams['axes.unicode_minus']=False
-            show_comparison(self,reference,ref,selected,aligned)
+            self.after(0,lambda: show_comparison(self,reference,ref,selected,aligned))
         except Exception as e:
             # Python 会在离开 except 块时清理异常变量 e，不能在稍后执行的
             # Tkinter lambda 中直接引用它；先复制成普通字符串。
             error_text = str(e)
             self.after(0, lambda msg=error_text: messagebox.showerror('分析失败', msg))
+        finally:
+            self._running=False
 
 if __name__=='__main__': App().mainloop()

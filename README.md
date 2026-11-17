@@ -11,7 +11,7 @@ python -m pip install -r requirements.txt
 python gps_delay_analyzer.py
 ```
 
-Select one to three GPS logs (`.log`, `.ubx`, or binary UBX files). Empty inputs are skipped. ULog input is optional.
+Select an FFC CSV truth file and one to three GPS logs (`.log`, `.ubx`, or binary UBX files). Empty GPS inputs are skipped. ULog is not required for the normal workflow.
 
 The parser checks UBX checksums, extracts NAV-PVT fields, and filters records without valid 3D fixes. Extracted data is written to `analysis_output/*.pvt.csv` locally.
 
@@ -31,7 +31,13 @@ The first selected GPS provides the reference timeline when ULog is omitted. Oth
 - Readouts show interpolated curve values, delta time, delta Y, and nearest matched samples' original iTOW differences.
 - Marker size adapts to visible density; all sample markers remain enabled.
 
-## ULog limitations
+## FFC truth and alignment
+
+The FFC CSV extracts `sensor.gps.velE`, `sensor.gps.velN`, `preint.vel.x`, and `preint.vel.y`. It searches a ±2 s delay range in 10 ms steps; for every candidate it estimates the 2D yaw by least squares, and selects the yaw/delay pair with the lowest N/E velocity RMS. The rotated `preint` velocity becomes the truth. If the CSV has `iTOW`, it is used directly; otherwise its relative `t` axis is shifted to the first selected GPS iTOW and the assumption is printed in the log.
+
+Each GPS is aligned by iTOW and its N/E delay is estimated with a ±2 s correlation-peak scan. Positive delay means the GPS lags the FFC truth.
+
+## Legacy ULog support
 
 The current `drone_fusion` support is preliminary. Its yaw units, reference north, coordinate conventions, and mapping from ULog timestamps to GPS iTOW require validation against the flight controller's message definitions. Do not treat its current automatic rotation/time mapping as verified ground truth or a measured GPS latency. GPS-only comparisons do not require ULog.
 
