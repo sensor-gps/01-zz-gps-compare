@@ -181,8 +181,8 @@ def show_comparison(parent, reference, ref, selected, aligned):
         if ref is not None:
             times=np.array(sorted(ref)); curves.append(('FFC 真值',(times-origin)/1000,np.array([ref[t].get(field,np.nan) for t in times])))
             source_times.append(times)
-        for (_,path),rows in zip(selected,aligned):
-            curves.append((os.path.splitext(os.path.basename(path))[0],
+        for (number,_),rows in zip(selected,aligned):
+            curves.append((f'GPS {number}',
                            np.array([(t-origin)/1000 for t,_ in rows]),np.array([row.get(field,np.nan) for _,row in rows])))
             source_times.append(np.array([row.get('_source_itow_ms',t) for t,row in rows]))
         plot_lines=[]

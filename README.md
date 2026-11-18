@@ -21,7 +21,7 @@ The first selected GPS provides the reference timeline when ULog is omitted. Oth
 
 ## Plot controls
 
-- Tabs show individual PVT fields; legend names come from input filenames.
+- Tabs show individual PVT fields; legends use GPS input numbers (GPS 1/2/3) to avoid exposing device names from input filenames.
 - Left-drag on empty plot space: rectangle zoom.
 - Middle-drag: pan. Mouse wheel: zoom.
 - Space or Home: restore the original view.
