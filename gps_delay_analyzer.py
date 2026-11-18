@@ -398,7 +398,7 @@ class App(tk.Tk):
         ttk.Label(self.accuracy_area,text='固定 yaw_diff(°)').grid(row=4,column=2,sticky='w',padx=(8,2))
         ttk.Entry(self.accuracy_area,textvariable=self.accuracy_yaw_diff,width=10).grid(row=4,column=3,sticky='w')
         ttk.Checkbutton(self.accuracy_area,text='估计 yaw_diff',variable=self.accuracy_estimate_yaw).grid(row=4,column=4,sticky='w',padx=(8,2))
-        ttk.Label(self.accuracy_area,text='GPS1 必选，用于建立 ULog 时间映射。按 GPS 独立历元统计，不自动补偿延迟。\n轨迹去除首个共同有效样本的位置偏置；结果是相对轨迹误差，不是绝对定位精度。\n固定 yaw_diff 有值时全时段使用该值；留空且勾选“估计 yaw_diff”时由 GPS1 与 drone_fusion 水平速度序列估计固定值；两者都不用时逐时刻自动计算 drone_fusion.yaw − fusion_gps.yaw。实际旋转角均为 −yaw_diff。\n按指定的 12 项位置、速度 RMSE / CEP / STD 指标对比；不绘图。').grid(row=5,column=0,columnspan=5,sticky='w',padx=8,pady=8)
+        ttk.Label(self.accuracy_area,text='GPS1 必选，用于建立 ULog 时间映射。按 GPS 独立历元统计，不自动补偿延迟。\n轨迹去除首个共同有效样本的位置偏置，再逐轴扣除平均偏差；结果是相对轨迹误差，不是绝对定位精度。\n固定 yaw_diff 有值时全时段使用该值；留空且勾选“估计 yaw_diff”时由 GPS1 与 drone_fusion 水平速度序列估计固定值；两者都不用时逐时刻自动计算 drone_fusion.yaw − fusion_gps.yaw。实际旋转角均为 −yaw_diff。\n按指定的 12 项位置、速度 RMSE / CEP / STD 指标对比；不绘图。').grid(row=5,column=0,columnspan=5,sticky='w',padx=8,pady=8)
         self.accuracy_button=ttk.Button(self.accuracy_area,text='开始精度评估并导出指标',command=self.run_accuracy)
         self.accuracy_button.grid(row=6,column=1,sticky='e')
         self.accuracy_log=tk.Text(self.accuracy_area,height=4);self.accuracy_log.grid(row=7,column=0,columnspan=3,sticky='ew')
