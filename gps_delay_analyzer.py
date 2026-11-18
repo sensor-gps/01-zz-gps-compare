@@ -359,6 +359,34 @@ class App(tk.Tk):
         ttk.Label(self.cno_area,text='图例名称留空时使用文件名').grid(row=3,column=3,columnspan=2,sticky='w',padx=8)
         self.log.grid_configure(columnspan=5)
         self.cno_log.grid_configure(columnspan=5)
+        self.list.insert('end','精度评估（动态指标）')
+        self.accuracy_area=ttk.Frame(self)
+        self.accuracy_ref=tk.StringVar();self.accuracy_gps=[];self.accuracy_tol=tk.StringVar(value='200')
+        ttk.Label(self.accuracy_area,text='ULog 真值文件').grid(row=0,column=0,sticky='w',padx=8)
+        ttk.Entry(self.accuracy_area,textvariable=self.accuracy_ref,width=75).grid(row=0,column=1,sticky='ew')
+        ttk.Button(self.accuracy_area,text='选择',command=lambda:self.pick(self.accuracy_ref,'ulog')).grid(row=0,column=2)
+        for i in range(3):
+            v=tk.StringVar();self.accuracy_gps.append(v)
+            ttk.Label(self.accuracy_area,text=f'GPS {i+1} 原始文件').grid(row=i+1,column=0,sticky='w',padx=8,pady=6)
+            ttk.Entry(self.accuracy_area,textvariable=v,width=75).grid(row=i+1,column=1,sticky='ew')
+            ttk.Button(self.accuracy_area,text='选择',command=lambda v=v:self.pick(v)).grid(row=i+1,column=2)
+        ttk.Label(self.accuracy_area,text='对齐容差(ms)').grid(row=4,column=0,sticky='w',padx=8)
+        ttk.Entry(self.accuracy_area,textvariable=self.accuracy_tol,width=10).grid(row=4,column=1,sticky='w')
+        ttk.Label(self.accuracy_area,text='GPS1 必选，用于建立 ULog 时间映射。按 GPS 独立历元统计，不自动补偿延迟。\n轨迹去除首个共同有效样本的位置偏置；结果是相对轨迹误差，不是绝对定位精度。\n按指定的 12 项位置、速度 RMSE / CEP / STD 指标对比；不绘图。').grid(row=5,column=0,columnspan=3,sticky='w',padx=8,pady=8)
+        self.accuracy_button=ttk.Button(self.accuracy_area,text='开始精度评估并导出指标',command=self.run_accuracy)
+        self.accuracy_button.grid(row=6,column=1,sticky='e')
+        self.accuracy_log=tk.Text(self.accuracy_area,height=4);self.accuracy_log.grid(row=7,column=0,columnspan=3,sticky='ew')
+        from pylib.accuracy_analysis import COMPARISON_HEADERS
+        self.accuracy_table=ttk.Treeview(self.accuracy_area,columns=COMPARISON_HEADERS,show='headings',height=15)
+        for key in COMPARISON_HEADERS:
+            self.accuracy_table.heading(key,text=key);self.accuracy_table.column(key,width=95,anchor='center',stretch=True)
+        self.accuracy_table.tag_configure('better',foreground='#137333',background='#e6f4ea')
+        self.accuracy_table.tag_configure('worse',foreground='#b3261e',background='#fce8e6')
+        self.accuracy_table.tag_configure('neutral',foreground='#555555')
+        self.accuracy_table.grid(row=8,column=0,columnspan=3,sticky='nsew')
+        scroll=ttk.Scrollbar(self.accuracy_area,orient='vertical',command=self.accuracy_table.yview)
+        scroll.grid(row=8,column=3,sticky='ns');self.accuracy_table.configure(yscrollcommand=scroll.set)
+        self.accuracy_area.columnconfigure(1,weight=1);self.accuracy_area.rowconfigure(8,weight=1)
         self.list.bind('<<ListboxSelect>>',self.select_project)
         self.fusion_frame=tk.StringVar(value='local')
         self.north_confirmed=tk.BooleanVar(value=True)
@@ -367,9 +395,43 @@ class App(tk.Tk):
     def select_project(self,event=None):
         selection=self.list.curselection()
         if not selection: return
-        for area in (self.project_area,self.eph_area,self.cno_area): area.pack_forget()
-        area=(self.project_area,self.eph_area,self.cno_area)[selection[0]]
+        for area in (self.project_area,self.eph_area,self.cno_area,self.accuracy_area): area.pack_forget()
+        area=(self.project_area,self.eph_area,self.cno_area,self.accuracy_area)[selection[0]]
         area.pack(side='right',fill='both',expand=True,padx=8,pady=8)
+    def run_accuracy(self):
+        if getattr(self,'_accuracy_running',False):return
+        try:
+            path=self.accuracy_ref.get().strip()
+            if not path.lower().endswith(('.ulg','.ulog')):raise ValueError('请选择 ULog 真值文件')
+            selected=[(i+1,v.get().strip()) for i,v in enumerate(self.accuracy_gps) if v.get().strip()]
+            if not selected or selected[0][0]!=1:raise ValueError('必须选择 GPS1 作为时间映射锚点')
+            tolerance=float(self.accuracy_tol.get())
+            if not np.isfinite(tolerance) or tolerance<0:raise ValueError('对齐容差必须是非负有限值')
+        except Exception as exc:messagebox.showerror('精度评估失败',str(exc));return
+        self.save_history();self._accuracy_running=True;self.accuracy_button.configure(state='disabled')
+        self.accuracy_log.delete('1.0','end');self.accuracy_log.insert('end','正在后台解析并计算动态精度指标……\n')
+        self.accuracy_table.delete(*self.accuracy_table.get_children())
+        def finish(result=None,output=None,error=None):
+            try:
+                if error:raise ValueError(error)
+                from pylib.accuracy_analysis import compare,export_comparison
+                for values,tag in compare(result):
+                    self.accuracy_table.insert('', 'end',values=values,tags=(tag,))
+                comparison_path=export_comparison(result)
+                self.accuracy_log.insert('end',f'绿色：优于 GPS1；红色：劣于 GPS1；灰色：相同或未比较。12 项指标均为误差值，越小越好。\n未补偿延迟；各 GPS 按自身有效样本统计，样本数详见原始指标 CSV。\n指标 CSV：{output}\n对比 CSV：{comparison_path}\n')
+            except Exception as exc:messagebox.showerror('精度评估失败',str(exc))
+            finally:self._accuracy_running=False;self.accuracy_button.configure(state='normal')
+        def worker():
+            try:
+                from pylib.fusion_reference import load
+                from pylib.accuracy_analysis import evaluate,export
+                series=[(number,parse_gps(p)) for number,p in selected]
+                reference=load(path,gps1=series[0][1],require_position=True)
+                result=evaluate(series,'dynamic',reference=reference,tolerance=tolerance)
+                output=export(result,'dynamic')
+                self.after(0,lambda:finish(result,output))
+            except Exception as exc:self.after(0,lambda error=str(exc):finish(error=error))
+        threading.Thread(target=worker,daemon=True).start()
     def run_cno(self):
         if getattr(self,'_cno_running',False): return
         try:
@@ -440,12 +502,16 @@ class App(tk.Tk):
             for v,p in zip(self.cno_gps,d.get('cno_gps',d.get('gps',[]))): v.set(p)
             for v,name in zip(self.cno_labels,d.get('cno_labels',[])): v.set(name)
             self.cno_tol.set(str(d.get('cno_tol','200')))
+            self.accuracy_ref.set(d.get('accuracy_ref',self.ref.get()))
+            for v,p in zip(self.accuracy_gps,d.get('accuracy_gps',d.get('gps',[]))):v.set(p)
+            self.accuracy_tol.set(str(d.get('accuracy_tol','200')))
         except (OSError,ValueError,TypeError,json.JSONDecodeError): pass
     def save_history(self):
         d={'ref':self.ref.get(),'gps':[v.get() for v in self.gps],'gps_labels':[v.get() for v in self.gps_labels],'tol':self.tol.get(),
            'fusion_frame':self.fusion_frame.get(),'north_confirmed':self.north_confirmed.get(),
            'anchor_boot':self.anchor_boot.get(),'anchor_tow':self.anchor_tow.get(),'eph_path':self.eph_path.get(),
-           'cno_gps':[v.get() for v in self.cno_gps],'cno_labels':[v.get() for v in self.cno_labels],'cno_tol':self.cno_tol.get()}
+           'cno_gps':[v.get() for v in self.cno_gps],'cno_labels':[v.get() for v in self.cno_labels],'cno_tol':self.cno_tol.get(),
+           'accuracy_ref':self.accuracy_ref.get(),'accuracy_gps':[v.get() for v in self.accuracy_gps],'accuracy_tol':self.accuracy_tol.get()}
         try:
             with open(self.config_path,'w',encoding='utf-8') as f: json.dump(d,f,ensure_ascii=False,indent=2)
         except OSError: pass

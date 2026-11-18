@@ -1,11 +1,13 @@
 """Explicit fusion frame conversion and boot timestamp -> GPS iTOW mapping."""
 import numpy as np
 
-def load(path,anchor_boot='',anchor_tow='',frame='local',north_confirmed=False,gps1=None):
+def load(path,anchor_boot='',anchor_tow='',frame='local',north_confirmed=False,gps1=None,require_position=False):
     from pyulog import ULog
     topics={t.name:t.data for t in ULog(path).data_list}
     if 'drone_fusion' not in topics: raise ValueError('ULog 缺少 drone_fusion')
     f=topics['drone_fusion']; t=np.asarray(f['timestamp'],dtype=float)
+    if require_position and any(k not in f for k in ('position_x','position_y','position_z')):
+        raise ValueError('drone_fusion 缺少三轴位置字段，无法进行相对轨迹精度评估')
     gps=topics.get('sensor_gps',{})
     key=next((k for k in ('iTOW','itow','i_tow','gps_itow','time_of_week') if k in gps),None)
     if gps1 is not None:
