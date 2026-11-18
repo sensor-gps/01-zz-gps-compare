@@ -378,6 +378,7 @@ class App(tk.Tk):
     def on_close(self): self.save_history(); self.destroy()
     def run(self):
         if getattr(self,'_running',False): return
+        self.log.delete('1.0','end')
         self.save_history()
         self._running=True
         self.log.insert('end','正在后台解析文件，请稍候，界面仍可响应……\n')
@@ -404,16 +405,25 @@ class App(tk.Tk):
             tol=float(self.tol.get())
             if not np.isfinite(tol) or tol<0: raise ValueError('对齐容差必须是非负有限数值')
             aligned=[align(reference,x,tol) for x in gps]
+            from gps_timing import estimate_delay, estimate_channel_delay
+
+            def report_delay(reference_data, data, title):
+                # 真值比较与 GPS 间比较共用同一算法和输出通道。
+                delay,score=estimate_delay(reference_data,data)
+                text=f'{title}: NE lag={delay:.0f} ms, correlation={score:.5f}\n'
+                for channel,label in (('vel_n','速度 N'),('vel_e','速度 E'),('vel_d','速度 D'),('speed','水平速度'),('pos_n','位置 N'),('pos_e','位置 E'),('pos_d','位置 D')):
+                    ch_delay,ch_corr,ch_rmse=estimate_channel_delay(reference_data,data,channel)
+                    if np.isfinite(ch_delay):
+                        text+=f'  {label}: lag={ch_delay:.0f} ms, corr={ch_corr:.5f}, RMSE={ch_rmse:.6g}\n'
+                self.after(0,lambda text=text:self.log.insert('end',text))
+
             if ref is not None:
-                from gps_timing import estimate_delay, estimate_channel_delay
                 for (number,path),data in zip(selected,gps):
-                    delay,score=estimate_delay(ref,data)
-                    text=f'GPS {number}: NE lag={delay:.0f} ms, correlation={score:.5f}\n'
-                    for channel,label in (('vel_n','速度 N'),('vel_e','速度 E'),('vel_d','速度 D'),('speed','水平速度'),('pos_n','位置 N'),('pos_e','位置 E'),('pos_d','位置 D')):
-                        ch_delay,ch_corr,ch_rmse=estimate_channel_delay(ref,data,channel)
-                        if np.isfinite(ch_delay):
-                            text+=f'  {label}: lag={ch_delay:.0f} ms, corr={ch_corr:.5f}, RMSE={ch_rmse:.6g}\n'
-                    self.after(0,lambda text=text:self.log.insert('end',text))
+                    report_delay(ref,data,f'GPS {number}')
+            gps_by_number={number:data for (number,_),data in zip(selected,gps)}
+            if 1 in gps_by_number and 2 in gps_by_number:
+                report_delay(gps_by_number[1],gps_by_number[2],'GPS 2 相对 GPS 1')
+                self.after(0,lambda:self.log.insert('end','GPS 2 相对 GPS 1：正延迟表示 GPS2 滞后 GPS1，负延迟表示 GPS2 超前 GPS1。\n'))
             if ref is not None and not any(aligned):
                 raise ValueError(f'GPS 与 fusion 的 iTOW 无重叠，请检查时间锚点。fusion 范围 {min(ref)}～{max(ref)} ms')
             mode='ULog drone_fusion NED' if ref is not None else 'GPS only'
