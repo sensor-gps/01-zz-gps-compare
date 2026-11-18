@@ -347,7 +347,7 @@ class App(tk.Tk):
         try:
             path=self.eph_path.get().strip()
             if not path: raise ValueError('请选择需要分析的 RTCM 日志文件')
-            import rtcm_ephemeris
+            from pylib import rtcm_ephemeris
             if plt is not None:
                 plt.rcParams['font.sans-serif']=['Microsoft YaHei','SimHei','DejaVu Sans']
                 plt.rcParams['axes.unicode_minus']=False
@@ -389,7 +389,7 @@ class App(tk.Tk):
             ref_path=self.ref.get().strip()
             if ref_path and not ref_path.lower().endswith(('.ulg','.ulog')):
                 raise ValueError('?? GPS ??????? ULog ?????? .ulg ????? ffc.csv ??????')
-            from fusion_reference import load
+            from pylib.fusion_reference import load
             ref=None
             selected=[(i+1,v.get().strip()) for i,v in enumerate(self.gps) if v.get().strip()]
             gps=[parse_gps(path) for _,path in selected]
@@ -405,7 +405,7 @@ class App(tk.Tk):
             tol=float(self.tol.get())
             if not np.isfinite(tol) or tol<0: raise ValueError('对齐容差必须是非负有限数值')
             aligned=[align(reference,x,tol) for x in gps]
-            from gps_timing import estimate_delay, estimate_channel_delay
+            from pylib.gps_timing import estimate_delay, estimate_channel_delay
 
             def report_delay(reference_data, data, title):
                 # 真值比较与 GPS 间比较共用同一算法和输出通道。

@@ -101,7 +101,7 @@ def show(parent,path):
     fig.subplots_adjust(left=.075,right=.92,top=.82,bottom=.24)
     fig.text(.075,.075,'主指标：本段有观测、截至段末仍未收到对应星历的卫星数 / 本段观测卫星数；之前收到的星历计为已存在。',fontsize=10)
     fig.text(.075,.04,'虚线仅表示本段未输出，不等同于星历无效；未检验有效期和健康状态。时间按文件顺序关联前一 GPS 历元。',fontsize=10)
-    output=Path(__file__).parent/'analysis_output'; output.mkdir(exist_ok=True)
+    output=Path(__file__).resolve().parent.parent/'analysis_output'; output.mkdir(exist_ok=True)
     csv_path=output/(Path(path).name+'.ephemeris.csv')
     with csv_path.open('w',newline='',encoding='utf-8-sig') as f:
         writer=csv.writer(f); writer.writerow(['start_s','end_s','observed_satellites','missing_satellites','cumulative_missing_percent','segment_missing_percent']); writer.writerows(stats['table'])

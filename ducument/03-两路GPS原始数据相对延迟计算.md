@@ -4,7 +4,7 @@
 
 [返回文档目录](01-工具使用说明.md)
 
-本文对应当前 `gps_delay_analyzer.py` 与 `gps_timing.py` 的实现。以 GPS1 为参考，估计 GPS2 相对 GPS1 的速度信号延迟，无需加载外部真值。文档统一使用 GPS1、GPS2 表示两路设备。
+本文对应当前 `gps_delay_analyzer.py` 与 `pylib/gps_timing.py` 的实现。以 GPS1 为参考，估计 GPS2 相对 GPS1 的速度信号延迟，无需加载外部真值。文档统一使用 GPS1、GPS2 表示两路设备。
 
 ## 1. 计算流程图
 
@@ -200,6 +200,5 @@ GPS 2 相对 GPS 1: 北东联合速度延迟=230 ms, 相关系数=0.99800
 | 时间格去重 | `gps_delay_analyzer.py` → `decimate_pvt_10hz` |
 | 绘图最近邻对齐 | `gps_delay_analyzer.py` → `align` |
 | 两路比较调用与结果输出 | `gps_delay_analyzer.py` → `App._run` 内 `report_delay` |
-| NE 联合延迟 | `gps_timing.py` → `estimate_delay` |
-| 单通道延迟与 RMSE | `gps_timing.py` → `estimate_channel_delay` |
-
+| NE 联合延迟 | `pylib/gps_timing.py` → `estimate_delay` |
+| 单通道延迟与 RMSE | `pylib/gps_timing.py` → `estimate_channel_delay` |
