@@ -15,6 +15,10 @@ except ImportError:
     plt = None
 
 FIELDS = ("lat", "lon", "alt", "vel_n", "vel_e", "vel_d", "speed", "heading", "hacc", "vacc", "num_sv")
+DELAY_CHANNELS = (('vel_n','速度 N'),('vel_e','速度 E'),('vel_d','速度 D'),('speed','水平速度'),
+                  ('pos_n','位置 N'),('pos_e','位置 E'),('pos_d','位置 D'))
+# 两路 GPS 互比不输出水平地速通道；该通道只用于 GPS 相对 ULog 真值的比较。
+TWO_GPS_DELAY_CHANNELS = tuple(channel for channel in DELAY_CHANNELS if channel[0] != 'speed')
 
 def _add(d, tow, **kw):
     if tow is not None and tow >= 0:
@@ -384,7 +388,7 @@ class App(tk.Tk):
         self.cno_log.grid_configure(columnspan=5)
         self.list.insert('end','精度评估（动态指标）')
         self.accuracy_area=ttk.Frame(self)
-        self.accuracy_ref=tk.StringVar();self.accuracy_gps=[];self.accuracy_tol=tk.StringVar(value='200');self.accuracy_yaw_diff=tk.StringVar();self.accuracy_estimate_yaw=tk.BooleanVar(value=True)
+        self.accuracy_ref=tk.StringVar();self.accuracy_gps=[];self.accuracy_tol=tk.StringVar(value='200');self.accuracy_yaw_diff=tk.StringVar();self.accuracy_estimate_yaw=tk.BooleanVar(value=True);self.accuracy_compensate=tk.BooleanVar(value=True)
         ttk.Label(self.accuracy_area,text='ULog 真值文件').grid(row=0,column=0,sticky='w',padx=8)
         ttk.Entry(self.accuracy_area,textvariable=self.accuracy_ref,width=75).grid(row=0,column=1,sticky='ew')
         ttk.Button(self.accuracy_area,text='选择',command=lambda:self.pick(self.accuracy_ref,'ulog')).grid(row=0,column=2)
@@ -398,7 +402,8 @@ class App(tk.Tk):
         ttk.Label(self.accuracy_area,text='固定 yaw_diff(°)').grid(row=4,column=2,sticky='w',padx=(8,2))
         ttk.Entry(self.accuracy_area,textvariable=self.accuracy_yaw_diff,width=10).grid(row=4,column=3,sticky='w')
         ttk.Checkbutton(self.accuracy_area,text='估计 yaw_diff',variable=self.accuracy_estimate_yaw).grid(row=4,column=4,sticky='w',padx=(8,2))
-        ttk.Label(self.accuracy_area,text='GPS1 必选，用于建立 ULog 时间映射。按 GPS 独立历元统计，不自动补偿延迟。\n轨迹去除首个共同有效样本的位置偏置，再逐轴扣除平均偏差；结果是相对轨迹误差，不是绝对定位精度。\n固定 yaw_diff 有值时全时段使用该值；留空且勾选“估计 yaw_diff”时由 GPS1 与 drone_fusion 水平速度序列估计固定值；两者都不用时逐时刻自动计算 drone_fusion.yaw − fusion_gps.yaw。实际旋转角均为 −yaw_diff。\n按指定的 12 项位置、速度 RMSE / CEP / STD 指标对比；不绘图。').grid(row=5,column=0,columnspan=5,sticky='w',padx=8,pady=8)
+        ttk.Checkbutton(self.accuracy_area,text='时延补偿(NE)',variable=self.accuracy_compensate).grid(row=4,column=5,sticky='w',padx=(8,2))
+        ttk.Label(self.accuracy_area,text='GPS1 必选，用于建立 ULog 时间映射。按 GPS 独立历元统计。\n默认先逐路估计 GPS 相对真值的 NE 时延并补偿时间戳，再统计精度；取消“时延补偿(NE)”则保留原始时延影响。\n轨迹去除首个共同有效样本的位置偏置，再逐轴扣除平均偏差；结果是相对轨迹误差，不是绝对定位精度。\n固定 yaw_diff 有值时全时段使用该值；留空且勾选“估计 yaw_diff”时由 GPS1 与 drone_fusion 水平速度序列估计固定值；两者都不用时逐时刻自动计算 drone_fusion.yaw − fusion_gps.yaw。实际旋转角均为 −yaw_diff。\n按指定的 12 项位置、速度 RMSE / CEP / STD 指标对比；不绘图。').grid(row=5,column=0,columnspan=6,sticky='w',padx=8,pady=8)
         self.accuracy_button=ttk.Button(self.accuracy_area,text='开始精度评估并导出指标',command=self.run_accuracy)
         self.accuracy_button.grid(row=6,column=1,sticky='e')
         self.accuracy_log=tk.Text(self.accuracy_area,height=4);self.accuracy_log.grid(row=7,column=0,columnspan=3,sticky='ew')
@@ -479,10 +484,11 @@ class App(tk.Tk):
             if not np.isfinite(tolerance) or tolerance<0:raise ValueError('对齐容差必须是非负有限值')
             yaw_diff=parse_optional_float(self.accuracy_yaw_diff.get(),'固定 yaw_diff(°)')
             estimate_yaw=bool(self.accuracy_estimate_yaw.get())
+            compensate=bool(self.accuracy_compensate.get())
         except Exception as exc:messagebox.showerror('精度评估失败',str(exc));return
         self.save_history();self._accuracy_running=True;self.accuracy_button.configure(state='disabled')
         self.accuracy_log.delete('1.0','end')
-        self.accuracy_log.insert('end','正在后台解析并计算动态精度指标……\n')
+        self.accuracy_log.insert('end',f'正在后台解析并计算动态精度指标……\n时延补偿：{"开启（NE）" if compensate else "关闭"}\n')
         self.accuracy_table.delete(*self.accuracy_table.get_children())
         def finish(result=None,output=None,error=None):
             try:
@@ -491,17 +497,23 @@ class App(tk.Tk):
                 for values,tag in compare(result):
                     self.accuracy_table.insert('', 'end',values=values,tags=(tag,))
                 comparison_path=export_comparison(result)
-                self.accuracy_log.insert('end',f'绿色：优于 GPS1；红色：劣于 GPS1；灰色：相同或未比较。12 项指标均为误差值，越小越好。\n未补偿延迟；各 GPS 按自身有效样本统计，样本数详见原始指标 CSV。\n指标 CSV：{output}\n对比 CSV：{comparison_path}\n')
+                compensation='已按各自 NE 时延补偿' if compensate else '未补偿延迟'
+                self.accuracy_log.insert('end',f'绿色：优于 GPS1；红色：劣于 GPS1；灰色：相同或未比较。12 项指标均为误差值，越小越好。\n{compensation}；各 GPS 按自身有效样本统计，样本数详见原始指标 CSV。\n指标 CSV：{output}\n对比 CSV：{comparison_path}\n')
             except Exception as exc:messagebox.showerror('精度评估失败',str(exc))
             finally:self._accuracy_running=False;self.accuracy_button.configure(state='normal')
         def worker():
             try:
                 from pylib.fusion_reference import load
-                from pylib.accuracy_analysis import evaluate,export
+                from pylib.accuracy_analysis import evaluate,export,compensate_delays
                 series=[(number,parse_gps(p)) for number,p in selected]
                 reference=load(path,gps1=series[0][1],require_position=True,yaw_diff_deg=yaw_diff,estimate_yaw_diff=estimate_yaw)
                 note=rotation_description(reference,yaw_diff,estimate_yaw)
                 self.after(0,lambda note=note:self.accuracy_log.insert('end',f'旋转方式：{note}\n'))
+                if compensate:
+                    series,delays=compensate_delays(reference,series)
+                    for number,delay,correlation in delays:
+                        self.after(0,lambda number=number,delay=delay,correlation=correlation:
+                                   self.accuracy_log.insert('end',f'GPS {number}: NE 时延={delay:+d} ms（corr={correlation:.5f}），时间戳偏移 {-delay:+d} ms\n'))
                 result=evaluate(series,'dynamic',reference=reference,tolerance=tolerance)
                 output=export(result,'dynamic')
                 self.after(0,lambda:finish(result,output))
@@ -632,12 +644,14 @@ class App(tk.Tk):
             aligned=[align(reference,x,tol) for x in gps]
             from pylib.gps_timing import estimate_delay, estimate_channel_delay
 
-            def report_delay(reference_data, data, title):
-                # 真值比较与 GPS 间比较共用同一算法和输出通道。
-                delay,score=estimate_delay(reference_data,data)
+            def report_delay(reference_data, data, title, uniform_grid=False):
+                # 真值比较与 GPS 间比较共用同一算法；两路 GPS 比较按参考脚本
+                # 使用 20 ms 均匀网格、限制插值间隙，且不输出水平地速通道。
+                delay,score=estimate_delay(reference_data,data,uniform_grid_resample=uniform_grid)
                 text=f'{title}: NE lag={delay:.0f} ms, correlation={score:.5f}\n'
-                for channel,label in (('vel_n','速度 N'),('vel_e','速度 E'),('vel_d','速度 D'),('speed','水平速度'),('pos_n','位置 N'),('pos_e','位置 E'),('pos_d','位置 D')):
-                    ch_delay,ch_corr,ch_rmse=estimate_channel_delay(reference_data,data,channel)
+                channels=TWO_GPS_DELAY_CHANNELS if uniform_grid else DELAY_CHANNELS
+                for channel,label in channels:
+                    ch_delay,ch_corr,ch_rmse=estimate_channel_delay(reference_data,data,channel,uniform_grid_resample=uniform_grid)
                     if np.isfinite(ch_delay):
                         text+=f'  {label}: lag={ch_delay:.0f} ms, corr={ch_corr:.5f}, RMSE={ch_rmse:.6g}\n'
                 self.after(0,lambda text=text:self.log.insert('end',text))
@@ -647,7 +661,7 @@ class App(tk.Tk):
                     report_delay(ref,data,f'GPS {number}')
             gps_by_number={number:data for (number,_),data in zip(selected,gps)}
             if 1 in gps_by_number and 2 in gps_by_number:
-                report_delay(gps_by_number[1],gps_by_number[2],'GPS 2 相对 GPS 1')
+                report_delay(gps_by_number[1],gps_by_number[2],'GPS 2 相对 GPS 1',uniform_grid=True)
                 self.after(0,lambda:self.log.insert('end','GPS 2 相对 GPS 1：正延迟表示 GPS2 滞后 GPS1，负延迟表示 GPS2 超前 GPS1。\n'))
             if ref is not None and not any(aligned):
                 raise ValueError(f'GPS 与 fusion 的 iTOW 无重叠，请检查时间锚点。fusion 范围 {min(ref)}～{max(ref)} ms')

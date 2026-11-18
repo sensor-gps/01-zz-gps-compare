@@ -90,7 +90,7 @@ k = argmin |GPS_iTOW - truth_iTOW|
 
 ## 延迟搜索和公式
 
-每个 GPS、每个通道扫描 `-2000 ms` 到 `+2000 ms`，步长 `10 ms`。对候选延迟 `d`，在 `truth_time + d` 查询 GPS 插值值，然后分别去均值：
+每个 GPS、每个通道扫描 `-2000 ms` 到 `+2000 ms`，步长 `10 ms`。对候选延迟 `d`，在 `truth_time + d` 查询 GPS 插值值，然后去均值：
 
 ```text
 a_i = truth_i - mean(truth)
@@ -111,9 +111,18 @@ RMSE(d) = sqrt(mean((gps_interp_i(d) - truth_i)^2))
 
 最佳延迟为 `argmax corr(d)`。正值表示 GPS 相对真值滞后，负值表示提前。
 
+以上为 GPS 相对 ULog 真值的比较。GPS1 与 GPS2 之间的两路比较使用 20 ms 均匀网格重采样和 1 s 最大插值间隙，见 [两路 GPS 原始数据相对延迟计算](03-两路GPS原始数据相对延迟计算.md)。
+
 ### N/E 联合延迟
 
+N/E 联合相关同样在有效重叠集合内去均值：
+
 ```text
+truth_Nc = truth_N - mean(truth_N)
+truth_Ec = truth_E - mean(truth_E)
+gps_Nc   = gps_N   - mean(gps_N)
+gps_Ec   = gps_E   - mean(gps_E)
+
 corr_NE(d) = sum(truth_Nc * gps_Nc + truth_Ec * gps_Ec)
              / (sqrt(sum(truth_Nc^2 + truth_Ec^2))
                 * sqrt(sum(gps_Nc^2 + gps_Ec^2)))

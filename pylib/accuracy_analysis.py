@@ -61,6 +61,30 @@ def velocity_errors(reference, data, tolerance):
             '水平速率差':np.linalg.norm(gv[ok,:2],axis=1)-np.linalg.norm(q[:,:2],axis=1)}
 
 
+def compensate_series(data, delay_ms):
+    """NE 时延补偿：GPS 滞后 delay_ms 时，把其时间戳整体前移。"""
+    shift=int(round(delay_ms))
+    return {int(round(t))-shift: row for t,row in data.items()}
+
+
+def compensate_delays(reference, series):
+    """逐路估计 GPS 相对真值的 NE 时延，并返回补偿后的序列。
+
+    返回 (补偿后的 series, [(GPS 编号, 补偿时延 ms, 相关系数), ...])。
+    时延为正表示 GPS 滞后真值，补偿时把 GPS 时间戳前移同样毫秒数。
+    """
+    from .gps_timing import estimate_delay
+    adjusted=[]; metadata=[]
+    for number,data in series:
+        delay,correlation=estimate_delay(reference,data)
+        if not np.isfinite(delay) or not np.isfinite(correlation):
+            raise ValueError(f'GPS {number} 无法估计 NE 时延（有效运动或重叠样本不足）；请取消勾选“时延补偿(NE)”')
+        shift=int(round(delay))
+        adjusted.append((number,compensate_series(data,shift)))
+        metadata.append((number,shift,float(correlation)))
+    return adjusted,metadata
+
+
 def evaluate(series, mode, reference=None, coordinates=None, tolerance=200):
     result=[]
     for number,data in series:
