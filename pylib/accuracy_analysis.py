@@ -1,4 +1,4 @@
-"""精度指标计算：静态已知坐标，或相对 ULog 的速度误差。"""
+"""精度指标计算：静态已知坐标，或相对 ULog 的速度误差与去偏轨迹误差。"""
 import csv
 from datetime import datetime
 from pathlib import Path
@@ -84,7 +84,7 @@ def trajectory_errors(reference,data,tolerance):
     j=np.searchsorted(rt,gt);lo=np.clip(j-1,0,len(rt)-1);hi=np.clip(j,0,len(rt)-1)
     ok=(gt>=rt[0])&(gt<=rt[-1])&(np.minimum(abs(rt[lo]-gt),abs(rt[hi]-gt))<=tolerance)&((rt[hi]-rt[lo])<=2*tolerance)
     times=gt[ok]
-    if len(times)<2:raise ValueError('轨迹有效匹配样本不足两个')
+    if len(times)<3:raise ValueError('轨迹有效匹配样本不足三个')
     rows={int(t):data[t] for t in times}
     first=rows[int(times[0])]
     local=static_errors(rows,first['lat'],first['lon'],first['alt'])
@@ -93,6 +93,9 @@ def trajectory_errors(reference,data,tolerance):
     err=(gps-gps[0])-(ref-ref[0])
     # 首个样本用于确定原点，不将其必然为零的误差计入统计。
     err=err[1:]
+    # 相对轨迹误差的均值可能不为零（例如两路轨迹的漂移趋势不同）：
+    # 逐轴求平均偏差并扣除，剩余部分再做精度统计。
+    err=err-np.nanmean(err,axis=0,keepdims=True)
     return {'轨迹北向':err[:,0],'轨迹东向':err[:,1],'轨迹地向':err[:,2],
             '轨迹水平':np.linalg.norm(err[:,:2],axis=1),'轨迹三维':np.linalg.norm(err,axis=1)}
 
