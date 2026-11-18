@@ -57,6 +57,8 @@ D = Z
 
 旋转后的 `vel_n/e/d` 是延迟分析真值；水平速度为 `sqrt(vel_n^2 + vel_e^2)`。角度差先归一化到 `[-180 deg, 180 deg]`，避免正负 180 度跳变累积整圈。
 
+界面提供“固定 yaw_diff(°)”输入框和“估计 yaw_diff”复选框，优先级为：固定值 > 速度序列估计（勾选时，默认勾选）> 逐时刻 `drone_fusion.yaw − fusion_gps.yaw`。实际旋转角均为 `−yaw_diff`。使用固定值或估计值时，允许 ULog 缺少 `fusion_gps` 航向话题。估计方法见 [yaw_diff 速度估计说明](06-yaw_diff速度估计说明.md)。
+
 ## sensor_gps 到 GPS1 的时间映射
 
 不能把两个文件的第一条记录强行当成同一时刻。程序用同一接收机的 ULog `sensor_gps` 和 GPS1 PVT 建立映射：
