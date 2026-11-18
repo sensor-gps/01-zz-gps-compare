@@ -69,9 +69,10 @@ def sanitize(source,destination):
             for key in names:
                 if not np.array_equal(d.data[key],checked[name].data[key],equal_nan=True):
                     raise ValueError(f'新 ULog 数据验证失败：{name}.{key}')
-        # 使用现有真值加载器验证旋转和有效性筛选可正常执行。
+        # 使用现有真值加载器验证保留字段的航向旋转和有效性筛选可正常执行。
+        # 脱敏不涉及速度序列 yaw_diff 估计，沿用 fusion_gps.yaw / drone_fusion.yaw 路径。
         from .fusion_reference import load
-        load(temp,require_position=True)
+        load(temp,require_position=True,estimate_yaw_diff=False)
         os.rename(temp,destination)
     finally:
         if Path(temp).exists():Path(temp).unlink()
