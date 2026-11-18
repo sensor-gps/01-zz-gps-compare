@@ -155,7 +155,7 @@ def align(ref, series, tolerance=200):
             rows.append((t,row))
     return rows
 
-def show_comparison(parent, reference, ref, selected, aligned):
+def show_comparison(parent, reference, ref, selected, aligned, labels=None):
     from matplotlib.figure import Figure
     from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
     window=tk.Toplevel(parent)
@@ -181,8 +181,8 @@ def show_comparison(parent, reference, ref, selected, aligned):
         if ref is not None:
             times=np.array(sorted(ref)); curves.append(('FFC 真值',(times-origin)/1000,np.array([ref[t].get(field,np.nan) for t in times])))
             source_times.append(times)
-        for (number,_),rows in zip(selected,aligned):
-            curves.append((f'GPS {number}',
+        for (number,path),rows in zip(selected,aligned):
+            curves.append(((labels or {}).get(number) or os.path.basename(path),
                            np.array([(t-origin)/1000 for t,_ in rows]),np.array([row.get(field,np.nan) for _,row in rows])))
             source_times.append(np.array([row.get('_source_itow_ms',t) for t,row in rows]))
         plot_lines=[]
@@ -310,14 +310,17 @@ def show_comparison(parent, reference, ref, selected, aligned):
 
 class App(tk.Tk):
     def __init__(self):
-        super().__init__(); self.title('GPS 延迟分析（iTOW/PVT）'); self.geometry('1000x620'); self.items=[]
+        super().__init__(); self.title('GPS 延迟分析（iTOW/PVT）'); self.geometry('1250x680'); self.items=[]
         self.config_path=os.path.join(os.path.dirname(os.path.abspath(__file__)),'.gps_delay_history.json')
         left=ttk.Frame(self); left.pack(side='left',fill='y',padx=8,pady=8); right=ttk.Frame(self); right.pack(side='right',fill='both',expand=True,padx=8,pady=8)
         ttk.Label(left,text='分析项目').pack(anchor='w'); self.list=tk.Listbox(left,width=24,height=12); self.list.pack(fill='y',expand=True); self.list.insert(0,'GPS 延迟分析（iTOW/PVT）'); self.list.selection_set(0)
         ttk.Label(right,text='VIO 真值 ffc.csv').grid(row=0,column=0,sticky='w'); self.ref=tk.StringVar(); ttk.Entry(right,textvariable=self.ref,width=75).grid(row=0,column=1); ttk.Button(right,text='选择',command=lambda:self.pick(self.ref,'ulog')).grid(row=0,column=2)
-        self.gps=[]
+        self.gps=[]; self.gps_labels=[]
         for i in range(3):
             v=tk.StringVar(); self.gps.append(v); ttk.Label(right,text=f'GPS {i+1} 原始文件').grid(row=i+1,column=0,sticky='w'); ttk.Entry(right,textvariable=v,width=75).grid(row=i+1,column=1); ttk.Button(right,text='选择',command=lambda x=v:self.pick(x)).grid(row=i+1,column=2)
+            name=tk.StringVar(); self.gps_labels.append(name)
+            ttk.Label(right,text='图例名称').grid(row=i+1,column=3,padx=(8,2))
+            ttk.Entry(right,textvariable=name,width=18).grid(row=i+1,column=4,sticky='ew')
         ttk.Label(right,text='对齐容差(ms)').grid(row=4,column=0,sticky='w'); self.tol=tk.StringVar(value='200'); ttk.Entry(right,textvariable=self.tol,width=10).grid(row=4,column=1,sticky='w')
         self.log=tk.Text(right,height=18); self.log.grid(row=6,column=0,columnspan=3,sticky='nsew'); right.rowconfigure(6,weight=1); right.columnconfigure(1,weight=1); ttk.Button(right,text='开始分析并绘图',command=self.run).grid(row=5,column=1,sticky='e',pady=8)
         self.list.insert('end','RTCM 星历检测')
@@ -332,6 +335,30 @@ class App(tk.Tk):
         ttk.Button(self.eph_area,text='解析并绘制星历缺失比例',command=self.run_ephemeris).grid(row=1,column=1,pady=12)
         ttk.Label(self.eph_area,text='支持含 RTCM3 二进制的日志；按 MSM 时间每 10 秒统计。\n左轴：星历接收缺失比例；右轴：该时间窗观测到的卫星数。\n缺失指本文件中尚未收到该卫星的星历，不代表接收机实际无星历。').grid(row=2,column=0,columnspan=3,sticky='w',padx=8)
         self.eph_area.columnconfigure(1,weight=1)
+        self.list.insert('end','C/N0 载噪比对比')
+        self.cno_area=ttk.Frame(self)
+        self.cno_gps=[]; self.cno_labels=[]
+        for i in range(3):
+            v=tk.StringVar(); self.cno_gps.append(v)
+            ttk.Label(self.cno_area,text=f'GPS {i+1} 原始文件').grid(row=i,column=0,sticky='w',padx=8,pady=6)
+            ttk.Entry(self.cno_area,textvariable=v,width=75).grid(row=i,column=1,sticky='ew')
+            ttk.Button(self.cno_area,text='选择',command=lambda v=v:self.pick(v)).grid(row=i,column=2,padx=8)
+            name=tk.StringVar(); self.cno_labels.append(name)
+            ttk.Label(self.cno_area,text='图例名称').grid(row=i,column=3,padx=(8,2))
+            ttk.Entry(self.cno_area,textvariable=name,width=18).grid(row=i,column=4,sticky='ew')
+        self.cno_tol=tk.StringVar(value='200')
+        ttk.Label(self.cno_area,text='对齐容差(ms)').grid(row=3,column=0,padx=8,sticky='w')
+        ttk.Entry(self.cno_area,textvariable=self.cno_tol,width=10).grid(row=3,column=1,sticky='w')
+        ttk.Label(self.cno_area,text='自动解析 NAV-SAT / NAV-SVINFO；同一 iTOW 优先使用 NAV-SAT。\n比较参与定位卫星数及有效 C/N0 的算术平均值；不需要真值文件。\n以第一路已选择的 GPS 为参考，在共同时间范围内最近邻对齐；不插值。').grid(row=4,column=0,columnspan=3,sticky='w',padx=8,pady=8)
+        self.cno_button=ttk.Button(self.cno_area,text='开始分析并导出图片',command=self.run_cno)
+        self.cno_button.grid(row=5,column=1,sticky='e',pady=8)
+        self.cno_log=tk.Text(self.cno_area,height=16)
+        self.cno_log.grid(row=6,column=0,columnspan=3,sticky='nsew',padx=8)
+        self.cno_area.columnconfigure(1,weight=1); self.cno_area.rowconfigure(6,weight=1)
+        ttk.Label(right,text='图例名称留空时使用文件名').grid(row=4,column=3,columnspan=2,sticky='w',padx=8)
+        ttk.Label(self.cno_area,text='图例名称留空时使用文件名').grid(row=3,column=3,columnspan=2,sticky='w',padx=8)
+        self.log.grid_configure(columnspan=5)
+        self.cno_log.grid_configure(columnspan=5)
         self.list.bind('<<ListboxSelect>>',self.select_project)
         self.fusion_frame=tk.StringVar(value='local')
         self.north_confirmed=tk.BooleanVar(value=True)
@@ -340,9 +367,51 @@ class App(tk.Tk):
     def select_project(self,event=None):
         selection=self.list.curselection()
         if not selection: return
-        self.project_area.pack_forget(); self.eph_area.pack_forget()
-        area=self.eph_area if selection[0]==1 else self.project_area
+        for area in (self.project_area,self.eph_area,self.cno_area): area.pack_forget()
+        area=(self.project_area,self.eph_area,self.cno_area)[selection[0]]
         area.pack(side='right',fill='both',expand=True,padx=8,pady=8)
+    def run_cno(self):
+        if getattr(self,'_cno_running',False): return
+        try:
+            if plt is None: raise ValueError('请先安装 matplotlib')
+            selected=[(i+1,v.get().strip()) for i,v in enumerate(self.cno_gps) if v.get().strip()]
+            labels={number:self.cno_labels[number-1].get().strip() or os.path.basename(path) for number,path in selected}
+            if len(selected)<2: raise ValueError('请至少选择两路 GPS 原始文件')
+            tolerance=float(self.cno_tol.get())
+            if not np.isfinite(tolerance) or tolerance<0: raise ValueError('对齐容差必须是非负有限数值')
+        except Exception as exc:
+            messagebox.showerror('载噪比分析失败',str(exc)); return
+        self.save_history(); self._cno_running=True
+        self.cno_button.configure(state='disabled')
+        self.cno_log.delete('1.0','end'); self.cno_log.insert('end','正在后台解析卫星消息……\n')
+        def finish(result=None,error=None):
+            try:
+                if error: raise ValueError(error)
+                from pylib import cno_analysis
+                plt.rcParams['font.sans-serif']=['Microsoft YaHei','SimHei','DejaVu Sans']
+                plt.rcParams['axes.unicode_minus']=False
+                self.cno_log.insert('end',f'共同有效范围：{int(result[1][0])}～{int(result[1][-1])} ms，共 {len(result[1])} 个参考历元\n')
+                for (number,count,stats),rows in zip(result[3],result[2]):
+                    valid=[r for r in rows if r]
+                    values=[r['mean_cno'] for r in valid if np.isfinite(r['mean_cno'])]
+                    self.cno_log.insert('end',f'GPS {number}：{count} 个历元，匹配 {len(valid)} 个参考时刻；SAT={stats["sat_frames"]} 帧，SVINFO={stats["svinfo_frames"]} 帧，校验失败={stats["checksum_errors"]} 帧\n')
+                    if values: self.cno_log.insert('end',f'  对齐后平均 C/N0={np.mean(values):.2f} dB-Hz；平均使用卫星数={np.mean([r["used_count"] for r in valid]):.2f}\n')
+                    else: self.cno_log.insert('end','  没有参与定位且 C/N0>0 的有效卫星数据。\n')
+                if not any(all(row is not None for row in rows) for rows in zip(*result[2])):
+                    raise ValueError('共同时间范围内没有满足容差的多路共同匹配点，请检查日志时间及容差')
+                image_path,csv_path=cno_analysis.show(self,result,labels=labels)
+                self.cno_log.insert('end',f'图片已保存：{image_path}\n数据已保存：{csv_path}\n')
+            except Exception as exc: messagebox.showerror('载噪比分析失败',str(exc))
+            finally:
+                self._cno_running=False; self.cno_button.configure(state='normal')
+        def worker():
+            try:
+                from pylib.cno_analysis import analyze
+                result=analyze(selected,tolerance)
+                self.after(0,lambda:finish(result=result))
+            except Exception as exc:
+                self.after(0,lambda error=str(exc):finish(error=error))
+        threading.Thread(target=worker,daemon=True).start()
     def run_ephemeris(self):
         try:
             path=self.eph_path.get().strip()
@@ -363,15 +432,20 @@ class App(tk.Tk):
             saved_ref=d.get('ref','')
             self.ref.set(saved_ref if str(saved_ref).lower().endswith(('.ulg','.ulog')) else '')
             for v,p in zip(self.gps,d.get('gps',[])): v.set(p)
+            for v,name in zip(self.gps_labels,d.get('gps_labels',[])): v.set(name)
             self.tol.set(str(d.get('tol','200'))); self.fusion_frame.set(d.get('fusion_frame','local'))
             self.north_confirmed.set(bool(d.get('north_confirmed',False)))
             self.anchor_boot.set(str(d.get('anchor_boot',''))); self.anchor_tow.set(str(d.get('anchor_tow','')))
             self.eph_path.set(d.get('eph_path',''))
+            for v,p in zip(self.cno_gps,d.get('cno_gps',d.get('gps',[]))): v.set(p)
+            for v,name in zip(self.cno_labels,d.get('cno_labels',[])): v.set(name)
+            self.cno_tol.set(str(d.get('cno_tol','200')))
         except (OSError,ValueError,TypeError,json.JSONDecodeError): pass
     def save_history(self):
-        d={'ref':self.ref.get(),'gps':[v.get() for v in self.gps],'tol':self.tol.get(),
+        d={'ref':self.ref.get(),'gps':[v.get() for v in self.gps],'gps_labels':[v.get() for v in self.gps_labels],'tol':self.tol.get(),
            'fusion_frame':self.fusion_frame.get(),'north_confirmed':self.north_confirmed.get(),
-           'anchor_boot':self.anchor_boot.get(),'anchor_tow':self.anchor_tow.get(),'eph_path':self.eph_path.get()}
+           'anchor_boot':self.anchor_boot.get(),'anchor_tow':self.anchor_tow.get(),'eph_path':self.eph_path.get(),
+           'cno_gps':[v.get() for v in self.cno_gps],'cno_labels':[v.get() for v in self.cno_labels],'cno_tol':self.cno_tol.get()}
         try:
             with open(self.config_path,'w',encoding='utf-8') as f: json.dump(d,f,ensure_ascii=False,indent=2)
         except OSError: pass
@@ -392,6 +466,7 @@ class App(tk.Tk):
             from pylib.fusion_reference import load
             ref=None
             selected=[(i+1,v.get().strip()) for i,v in enumerate(self.gps) if v.get().strip()]
+            labels={number:self.gps_labels[number-1].get().strip() or os.path.basename(path) for number,path in selected}
             gps=[parse_gps(path) for _,path in selected]
             if not gps: raise RuntimeError('至少选择一个 GPS 文件')
             for (number,path),data in zip(selected,gps):
@@ -432,7 +507,7 @@ class App(tk.Tk):
                 self.after(0,lambda number=number,data=data,rows=rows: self.log.insert('end',f'GPS {number}：{len(data)} 点，匹配 {len(rows)} 点\n'))
             plt.rcParams['font.sans-serif']=['Microsoft YaHei','SimHei','DejaVu Sans']
             plt.rcParams['axes.unicode_minus']=False
-            self.after(0,lambda: show_comparison(self,reference,ref,selected,aligned))
+            self.after(0,lambda: show_comparison(self,reference,ref,selected,aligned,labels=labels))
         except Exception as e:
             # Python 会在离开 except 块时清理异常变量 e，不能在稍后执行的
             # Tkinter lambda 中直接引用它；先复制成普通字符串。
