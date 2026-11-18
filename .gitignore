@@ -8,3 +8,7 @@ venv/
 *.ubx
 *.ulg
 *.bin
+
+# 保留 log 目录中的全部测试数据。
+!/log/
+!/log/**
