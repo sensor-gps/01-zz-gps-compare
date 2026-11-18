@@ -387,6 +387,19 @@ class App(tk.Tk):
         scroll=ttk.Scrollbar(self.accuracy_area,orient='vertical',command=self.accuracy_table.yview)
         scroll.grid(row=8,column=3,sticky='ns');self.accuracy_table.configure(yscrollcommand=scroll.set)
         self.accuracy_area.columnconfigure(1,weight=1);self.accuracy_area.rowconfigure(8,weight=1)
+        self.list.insert('end','ULog 脱敏')
+        self.sanitize_area=ttk.Frame(self)
+        self.sanitize_source=tk.StringVar();self.sanitize_destination=tk.StringVar()
+        for row,label,var in ((0,'原始 ULog 文件',self.sanitize_source),(1,'输出 ULog 文件',self.sanitize_destination)):
+            ttk.Label(self.sanitize_area,text=label).grid(row=row,column=0,sticky='w',padx=8,pady=8)
+            ttk.Entry(self.sanitize_area,textvariable=var,width=80).grid(row=row,column=1,sticky='ew')
+            ttk.Button(self.sanitize_area,text='选择',command=lambda row=row:self.pick_sanitize(row)).grid(row=row,column=2,padx=8)
+        ttk.Label(self.sanitize_area,text='只保留延迟与精度评估需要的三个主题及字段；不复制参数、设备信息和日志文本。\n注意：GPS1 身份匹配需要 sensor_gps 经纬度，所以新文件仍含位置和相对轨迹数据。\n不改变时间戳、采样率或保留字段的数值；原文件不会被修改。').grid(row=2,column=0,columnspan=3,sticky='w',padx=8,pady=8)
+        self.sanitize_button=ttk.Button(self.sanitize_area,text='生成并验证精简 ULog',command=self.run_sanitize)
+        self.sanitize_button.grid(row=3,column=1,sticky='e',pady=8)
+        self.sanitize_log=tk.Text(self.sanitize_area,height=20)
+        self.sanitize_log.grid(row=4,column=0,columnspan=3,sticky='nsew')
+        self.sanitize_area.columnconfigure(1,weight=1);self.sanitize_area.rowconfigure(4,weight=1)
         self.list.bind('<<ListboxSelect>>',self.select_project)
         self.fusion_frame=tk.StringVar(value='local')
         self.north_confirmed=tk.BooleanVar(value=True)
@@ -395,9 +408,40 @@ class App(tk.Tk):
     def select_project(self,event=None):
         selection=self.list.curselection()
         if not selection: return
-        for area in (self.project_area,self.eph_area,self.cno_area,self.accuracy_area): area.pack_forget()
-        area=(self.project_area,self.eph_area,self.cno_area,self.accuracy_area)[selection[0]]
+        for area in (self.project_area,self.eph_area,self.cno_area,self.accuracy_area,self.sanitize_area): area.pack_forget()
+        area=(self.project_area,self.eph_area,self.cno_area,self.accuracy_area,self.sanitize_area)[selection[0]]
         area.pack(side='right',fill='both',expand=True,padx=8,pady=8)
+    def pick_sanitize(self,row):
+        if row==0:
+            path=filedialog.askopenfilename(filetypes=[('ULog','*.ulg *.ulog'),('所有文件','*.*')])
+            if path:
+                self.sanitize_source.set(path)
+                self.sanitize_destination.set(os.path.splitext(path)[0]+'_sanitized.ulg')
+        else:
+            path=filedialog.asksaveasfilename(defaultextension='.ulg',filetypes=[('ULog','*.ulg')])
+            if path:self.sanitize_destination.set(path)
+    def run_sanitize(self):
+        if getattr(self,'_sanitize_running',False):return
+        source=self.sanitize_source.get().strip();destination=self.sanitize_destination.get().strip()
+        if not source or not destination:
+            messagebox.showerror('ULog 脱敏失败','请选择原始文件和输出文件');return
+        self.save_history();self._sanitize_running=True;self.sanitize_button.configure(state='disabled')
+        self.sanitize_log.delete('1.0','end');self.sanitize_log.insert('end','正在后台提取白名单字段并验证……\n')
+        def finish(report=None,error=None):
+            try:
+                if error:raise ValueError(error)
+                for name,count,fields in report:
+                    self.sanitize_log.insert('end',f'{name}：{count} 条\n  保留字段：{", ".join(fields)}\n')
+                self.sanitize_log.insert('end',f'完成，已逐字段验证数值及真值加载兼容性。\n输出：{destination}\n大小：{os.path.getsize(source):,} → {os.path.getsize(destination):,} 字节\n可在延迟或精度项目中选择该新文件，并搭配原来同一份 GPS1 日志。\n')
+            except Exception as exc:messagebox.showerror('ULog 脱敏失败',str(exc))
+            finally:self._sanitize_running=False;self.sanitize_button.configure(state='normal')
+        def worker():
+            try:
+                from pylib.ulog_sanitize import sanitize
+                report=sanitize(source,destination)
+                self.after(0,lambda:finish(report=report))
+            except Exception as exc:self.after(0,lambda error=str(exc):finish(error=error))
+        threading.Thread(target=worker,daemon=True).start()
     def run_accuracy(self):
         if getattr(self,'_accuracy_running',False):return
         try:
@@ -505,13 +549,16 @@ class App(tk.Tk):
             self.accuracy_ref.set(d.get('accuracy_ref',self.ref.get()))
             for v,p in zip(self.accuracy_gps,d.get('accuracy_gps',d.get('gps',[]))):v.set(p)
             self.accuracy_tol.set(str(d.get('accuracy_tol','200')))
+            self.sanitize_source.set(d.get('sanitize_source',''))
+            self.sanitize_destination.set(d.get('sanitize_destination',''))
         except (OSError,ValueError,TypeError,json.JSONDecodeError): pass
     def save_history(self):
         d={'ref':self.ref.get(),'gps':[v.get() for v in self.gps],'gps_labels':[v.get() for v in self.gps_labels],'tol':self.tol.get(),
            'fusion_frame':self.fusion_frame.get(),'north_confirmed':self.north_confirmed.get(),
            'anchor_boot':self.anchor_boot.get(),'anchor_tow':self.anchor_tow.get(),'eph_path':self.eph_path.get(),
            'cno_gps':[v.get() for v in self.cno_gps],'cno_labels':[v.get() for v in self.cno_labels],'cno_tol':self.cno_tol.get(),
-           'accuracy_ref':self.accuracy_ref.get(),'accuracy_gps':[v.get() for v in self.accuracy_gps],'accuracy_tol':self.accuracy_tol.get()}
+           'accuracy_ref':self.accuracy_ref.get(),'accuracy_gps':[v.get() for v in self.accuracy_gps],'accuracy_tol':self.accuracy_tol.get(),
+           'sanitize_source':self.sanitize_source.get(),'sanitize_destination':self.sanitize_destination.get()}
         try:
             with open(self.config_path,'w',encoding='utf-8') as f: json.dump(d,f,ensure_ascii=False,indent=2)
         except OSError: pass
