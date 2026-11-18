@@ -20,6 +20,25 @@ def _add(d, tow, **kw):
     if tow is not None and tow >= 0:
         d.setdefault(int(tow), {}).update(kw)
 
+def parse_optional_float(text, name):
+    """留空返回 None；否则必须是有限数值。"""
+    text=str(text).strip()
+    if not text: return None
+    try: value=float(text)
+    except ValueError: raise ValueError(f'{name}必须是数字，或留空使用逐时刻自动旋转') from None
+    if not np.isfinite(value): raise ValueError(f'{name}必须是有限值')
+    return value
+
+def rotation_description(reference, yaw_diff, estimate):
+    """描述本次真值使用的 yaw_diff 来源。"""
+    if yaw_diff is not None:
+        return f'固定 yaw_diff={yaw_diff:g}°（实际旋转角 {-yaw_diff:g}°）'
+    if estimate:
+        try: value=next(iter(reference.values()))['yaw_diff_deg']
+        except (StopIteration,KeyError,TypeError): return '速度序列估计'
+        return f'速度序列估计 yaw_diff={value:.4g}°（实际旋转角 {-value:.4g}°）'
+    return '逐时刻自动（drone_fusion.yaw − fusion_gps.yaw）'
+
 def parse_ubx(path):
     data = open(path, "rb").read(); out = {}
     i = 0
@@ -322,6 +341,10 @@ class App(tk.Tk):
             ttk.Label(right,text='图例名称').grid(row=i+1,column=3,padx=(8,2))
             ttk.Entry(right,textvariable=name,width=18).grid(row=i+1,column=4,sticky='ew')
         ttk.Label(right,text='对齐容差(ms)').grid(row=4,column=0,sticky='w'); self.tol=tk.StringVar(value='200'); ttk.Entry(right,textvariable=self.tol,width=10).grid(row=4,column=1,sticky='w')
+        self.yaw_diff=tk.StringVar();self.estimate_yaw=tk.BooleanVar(value=True)
+        ttk.Checkbutton(right,text='估计 yaw_diff',variable=self.estimate_yaw).grid(row=4,column=2,sticky='w',padx=(8,2))
+        ttk.Label(right,text='固定 yaw_diff(°)').grid(row=4,column=3,sticky='w');ttk.Entry(right,textvariable=self.yaw_diff,width=10).grid(row=4,column=4,sticky='ew')
+        ttk.Label(right,text='固定值优先；否则勾选=速度序列估计，取消=逐时刻自动').grid(row=5,column=3,columnspan=2,sticky='w')
         self.log=tk.Text(right,height=18); self.log.grid(row=6,column=0,columnspan=3,sticky='nsew'); right.rowconfigure(6,weight=1); right.columnconfigure(1,weight=1); ttk.Button(right,text='开始分析并绘图',command=self.run).grid(row=5,column=1,sticky='e',pady=8)
         self.list.insert('end','RTCM 星历检测')
         scrollbar=ttk.Scrollbar(left,orient='vertical',command=self.list.yview)
@@ -361,7 +384,7 @@ class App(tk.Tk):
         self.cno_log.grid_configure(columnspan=5)
         self.list.insert('end','精度评估（动态指标）')
         self.accuracy_area=ttk.Frame(self)
-        self.accuracy_ref=tk.StringVar();self.accuracy_gps=[];self.accuracy_tol=tk.StringVar(value='200')
+        self.accuracy_ref=tk.StringVar();self.accuracy_gps=[];self.accuracy_tol=tk.StringVar(value='200');self.accuracy_yaw_diff=tk.StringVar();self.accuracy_estimate_yaw=tk.BooleanVar(value=True)
         ttk.Label(self.accuracy_area,text='ULog 真值文件').grid(row=0,column=0,sticky='w',padx=8)
         ttk.Entry(self.accuracy_area,textvariable=self.accuracy_ref,width=75).grid(row=0,column=1,sticky='ew')
         ttk.Button(self.accuracy_area,text='选择',command=lambda:self.pick(self.accuracy_ref,'ulog')).grid(row=0,column=2)
@@ -372,7 +395,10 @@ class App(tk.Tk):
             ttk.Button(self.accuracy_area,text='选择',command=lambda v=v:self.pick(v)).grid(row=i+1,column=2)
         ttk.Label(self.accuracy_area,text='对齐容差(ms)').grid(row=4,column=0,sticky='w',padx=8)
         ttk.Entry(self.accuracy_area,textvariable=self.accuracy_tol,width=10).grid(row=4,column=1,sticky='w')
-        ttk.Label(self.accuracy_area,text='GPS1 必选，用于建立 ULog 时间映射。按 GPS 独立历元统计，不自动补偿延迟。\n轨迹去除首个共同有效样本的位置偏置；结果是相对轨迹误差，不是绝对定位精度。\n按指定的 12 项位置、速度 RMSE / CEP / STD 指标对比；不绘图。').grid(row=5,column=0,columnspan=3,sticky='w',padx=8,pady=8)
+        ttk.Label(self.accuracy_area,text='固定 yaw_diff(°)').grid(row=4,column=2,sticky='w',padx=(8,2))
+        ttk.Entry(self.accuracy_area,textvariable=self.accuracy_yaw_diff,width=10).grid(row=4,column=3,sticky='w')
+        ttk.Checkbutton(self.accuracy_area,text='估计 yaw_diff',variable=self.accuracy_estimate_yaw).grid(row=4,column=4,sticky='w',padx=(8,2))
+        ttk.Label(self.accuracy_area,text='GPS1 必选，用于建立 ULog 时间映射。按 GPS 独立历元统计，不自动补偿延迟。\n轨迹去除首个共同有效样本的位置偏置；结果是相对轨迹误差，不是绝对定位精度。\n固定 yaw_diff 有值时全时段使用该值；留空且勾选“估计 yaw_diff”时由 GPS1 与 drone_fusion 水平速度序列估计固定值；两者都不用时逐时刻自动计算 drone_fusion.yaw − fusion_gps.yaw。实际旋转角均为 −yaw_diff。\n按指定的 12 项位置、速度 RMSE / CEP / STD 指标对比；不绘图。').grid(row=5,column=0,columnspan=5,sticky='w',padx=8,pady=8)
         self.accuracy_button=ttk.Button(self.accuracy_area,text='开始精度评估并导出指标',command=self.run_accuracy)
         self.accuracy_button.grid(row=6,column=1,sticky='e')
         self.accuracy_log=tk.Text(self.accuracy_area,height=4);self.accuracy_log.grid(row=7,column=0,columnspan=3,sticky='ew')
@@ -451,9 +477,12 @@ class App(tk.Tk):
             if not selected or selected[0][0]!=1:raise ValueError('必须选择 GPS1 作为时间映射锚点')
             tolerance=float(self.accuracy_tol.get())
             if not np.isfinite(tolerance) or tolerance<0:raise ValueError('对齐容差必须是非负有限值')
+            yaw_diff=parse_optional_float(self.accuracy_yaw_diff.get(),'固定 yaw_diff(°)')
+            estimate_yaw=bool(self.accuracy_estimate_yaw.get())
         except Exception as exc:messagebox.showerror('精度评估失败',str(exc));return
         self.save_history();self._accuracy_running=True;self.accuracy_button.configure(state='disabled')
-        self.accuracy_log.delete('1.0','end');self.accuracy_log.insert('end','正在后台解析并计算动态精度指标……\n')
+        self.accuracy_log.delete('1.0','end')
+        self.accuracy_log.insert('end','正在后台解析并计算动态精度指标……\n')
         self.accuracy_table.delete(*self.accuracy_table.get_children())
         def finish(result=None,output=None,error=None):
             try:
@@ -470,7 +499,9 @@ class App(tk.Tk):
                 from pylib.fusion_reference import load
                 from pylib.accuracy_analysis import evaluate,export
                 series=[(number,parse_gps(p)) for number,p in selected]
-                reference=load(path,gps1=series[0][1],require_position=True)
+                reference=load(path,gps1=series[0][1],require_position=True,yaw_diff_deg=yaw_diff,estimate_yaw_diff=estimate_yaw)
+                note=rotation_description(reference,yaw_diff,estimate_yaw)
+                self.after(0,lambda note=note:self.accuracy_log.insert('end',f'旋转方式：{note}\n'))
                 result=evaluate(series,'dynamic',reference=reference,tolerance=tolerance)
                 output=export(result,'dynamic')
                 self.after(0,lambda:finish(result,output))
@@ -539,7 +570,9 @@ class App(tk.Tk):
             self.ref.set(saved_ref if str(saved_ref).lower().endswith(('.ulg','.ulog')) else '')
             for v,p in zip(self.gps,d.get('gps',[])): v.set(p)
             for v,name in zip(self.gps_labels,d.get('gps_labels',[])): v.set(name)
-            self.tol.set(str(d.get('tol','200'))); self.fusion_frame.set(d.get('fusion_frame','local'))
+            self.tol.set(str(d.get('tol','200')))
+            # 固定 yaw_diff 与估计开关都不写入历史：启动时固定值为空、估计默认打开。
+            self.fusion_frame.set(d.get('fusion_frame','local'))
             self.north_confirmed.set(bool(d.get('north_confirmed',False)))
             self.anchor_boot.set(str(d.get('anchor_boot',''))); self.anchor_tow.set(str(d.get('anchor_tow','')))
             self.eph_path.set(d.get('eph_path',''))
@@ -551,6 +584,7 @@ class App(tk.Tk):
             self.accuracy_tol.set(str(d.get('accuracy_tol','200')))
             self.sanitize_source.set(d.get('sanitize_source',''))
             self.sanitize_destination.set(d.get('sanitize_destination',''))
+            # 固定 yaw_diff 与估计开关都不写入历史：启动时固定值为空、估计默认打开。
         except (OSError,ValueError,TypeError,json.JSONDecodeError): pass
     def save_history(self):
         d={'ref':self.ref.get(),'gps':[v.get() for v in self.gps],'gps_labels':[v.get() for v in self.gps_labels],'tol':self.tol.get(),
@@ -584,10 +618,13 @@ class App(tk.Tk):
             if not gps: raise RuntimeError('至少选择一个 GPS 文件')
             for (number,path),data in zip(selected,gps):
                 if not data: raise RuntimeError(f'GPS {number} 未解析到有效数据：{path}')
+            yaw_diff=parse_optional_float(self.yaw_diff.get(),'固定 yaw_diff(°)')
+            estimate_yaw=bool(self.estimate_yaw.get())
             if ref_path:
                 if not self.gps[0].get().strip(): raise ValueError('GPS1 is required as the sensor_gps clock anchor')
-                ref=load(ref_path,gps1=gps[0])
-                self.after(0,lambda:self.log.insert('end','ULog sensor_gps -> GPS1 PVT identity clock mapping; GPS2/3 share iTOW.\n'))
+                ref=load(ref_path,gps1=gps[0],yaw_diff_deg=yaw_diff,estimate_yaw_diff=estimate_yaw)
+                rotation=rotation_description(ref,yaw_diff,estimate_yaw)
+                self.after(0,lambda rotation=rotation:self.log.insert('end',f'ULog sensor_gps -> GPS1 PVT identity clock mapping; GPS2/3 share iTOW. 旋转方式：{rotation}\n'))
             reference=ref if ref is not None else gps[0]
             if not reference: raise RuntimeError('参考文件中没有可分析的数据')
             tol=float(self.tol.get())
