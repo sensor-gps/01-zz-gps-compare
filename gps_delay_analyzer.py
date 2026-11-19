@@ -43,7 +43,7 @@ def rotation_description(reference, yaw_diff, estimate):
         return f'速度序列估计 yaw_diff={value:.4g}°（实际旋转角 {-value:.4g}°）'
     return '逐时刻自动（drone_fusion.yaw − fusion_gps.yaw）'
 
-def parse_ubx(path):
+def parse_ubx(path, exact_fix=None):
     data = open(path, "rb").read(); out = {}
     i = 0
     while i + 8 <= len(data):
@@ -68,6 +68,9 @@ def parse_ubx(path):
             hacc, vacc = struct.unpack_from("<II", p, 40)
             vel_n, vel_e, vel_d, speed, head = struct.unpack_from("<iiiii", p, 48)
             num_sv = p[23]
+            if exact_fix is not None and p[20]!=exact_fix:
+                i=end
+                continue
             # 排除尚无有效定位的启动数据；保留原始 GPS 周内毫秒。
             if not (0 < tow < 604800000 and p[20]>=3 and p[21]&1
                     and -1800000000<=lon<=1800000000 and -900000000<=lat<=900000000):
@@ -439,6 +442,30 @@ class App(tk.Tk):
         self.sanitize_log=tk.Text(self.sanitize_area,height=20)
         self.sanitize_log.grid(row=4,column=0,columnspan=3,sticky='nsew')
         self.sanitize_area.columnconfigure(1,weight=1);self.sanitize_area.rowconfigure(4,weight=1)
+        self.list.insert('end','GPS 相对精度对比')
+        self.relative_area=ttk.Frame(self);self.relative_paths=[tk.StringVar(),tk.StringVar()]
+        self.relative_window=tk.StringVar(value='3');self.relative_tolerance=tk.StringVar(value='60')
+        for i,v in enumerate(self.relative_paths):
+            ttk.Label(self.relative_area,text=f'GPS {i+1} 原始文件').grid(row=i,column=0,padx=8,pady=8)
+            ttk.Entry(self.relative_area,textvariable=v,width=80).grid(row=i,column=1,sticky='ew')
+            ttk.Button(self.relative_area,text='选择',command=lambda v=v:self.pick(v)).grid(row=i,column=2)
+        options=ttk.Frame(self.relative_area);options.grid(row=2,column=0,columnspan=3,sticky='w',padx=8)
+        ttk.Label(options,text='滑窗长度(s)').pack(side='left');ttk.Entry(options,textvariable=self.relative_window,width=8).pack(side='left',padx=8)
+        ttk.Label(options,text='一对一匹配容差(ms)').pack(side='left');ttk.Entry(options,textvariable=self.relative_tolerance,width=8).pack(side='left',padx=8)
+        ttk.Label(self.relative_area,text='同运动条件下，以居中滑窗二次拟合去除局部运动趋势；默认 3 秒。只使用 fixType=3 有效 PVT。\n绿色表示 GPS2 残差更小，红色表示更大；这是短时去趋势波动指标，不是可分离的绝对测量噪声。\n真实急转、加速度变化、接收机滤波和时延均会影响结果；建议同时检查 2/3/5 秒窗口的结论是否一致。',wraplength=1000).grid(row=3,column=0,columnspan=3,sticky='ew',padx=8,pady=8)
+        self.relative_button=ttk.Button(self.relative_area,text='开始相对精度对比',command=self.run_relative)
+        self.relative_button.grid(row=4,column=1,sticky='e',pady=8)
+        from pylib.relative_accuracy import HEADERS as RELATIVE_HEADERS
+        self.relative_table=ttk.Treeview(self.relative_area,columns=RELATIVE_HEADERS,show='headings',height=8)
+        for key in RELATIVE_HEADERS:
+            self.relative_table.heading(key,text=key);self.relative_table.column(key,width=125,anchor='center')
+        for tag,color,bg in (('better','#137333','#e6f4ea'),('worse','#b3261e','#fce8e6'),('neutral','#555555','#ffffff')):
+            self.relative_table.tag_configure(tag,foreground=color,background=bg)
+        self.relative_table.grid(row=5,column=0,columnspan=3,sticky='nsew')
+        scrollbar=ttk.Scrollbar(self.relative_area,orient='horizontal',command=self.relative_table.xview)
+        scrollbar.grid(row=6,column=0,columnspan=3,sticky='ew');self.relative_table.configure(xscrollcommand=scrollbar.set)
+        self.relative_log=tk.Text(self.relative_area,height=8,wrap='word');self.relative_log.grid(row=7,column=0,columnspan=3,sticky='nsew')
+        self.relative_area.columnconfigure(1,weight=1);self.relative_area.rowconfigure(7,weight=1)
         self.list.bind('<<ListboxSelect>>',self.select_project)
         self.fusion_frame=tk.StringVar(value='local')
         self.north_confirmed=tk.BooleanVar(value=True)
@@ -447,9 +474,34 @@ class App(tk.Tk):
     def select_project(self,event=None):
         selection=self.list.curselection()
         if not selection: return
-        for area in (self.project_area,self.eph_area,self.cno_area,self.accuracy_area,self.sanitize_area): area.pack_forget()
-        area=(self.project_area,self.eph_area,self.cno_area,self.accuracy_area,self.sanitize_area)[selection[0]]
+        for area in (self.project_area,self.eph_area,self.cno_area,self.accuracy_area,self.sanitize_area,self.relative_area): area.pack_forget()
+        area=(self.project_area,self.eph_area,self.cno_area,self.accuracy_area,self.sanitize_area,self.relative_area)[selection[0]]
         area.pack(side='right',fill='both',expand=True,padx=8,pady=8)
+    def run_relative(self):
+        if getattr(self,'_relative_running',False):return
+        try:
+            paths=[v.get().strip() for v in self.relative_paths]
+            if not all(paths):raise ValueError('请选择两路 GPS 文件')
+            window=float(self.relative_window.get());tolerance=float(self.relative_tolerance.get())
+        except Exception as exc:messagebox.showerror('相对精度对比失败',str(exc));return
+        self.save_history();self._relative_running=True;self.relative_button.configure(state='disabled')
+        self.relative_table.delete(*self.relative_table.get_children())
+        self.relative_log.delete('1.0','end');self.relative_log.insert('end','正在后台解析和滑窗拟合……\n')
+        def finish(result=None,error=None):
+            try:
+                if error:raise ValueError(error)
+                for values,tag in result[0]:self.relative_table.insert('','end',values=values,tags=(tag,))
+                self.relative_log.insert('end',result[1]);self.relative_log.see('end')
+            except Exception as exc:messagebox.showerror('相对精度对比失败',str(exc))
+            finally:self._relative_running=False;self.relative_button.configure(state='normal')
+        def worker():
+            try:
+                from pylib.relative_accuracy import analyze
+                data=[parse_ubx(path,exact_fix=3) for path in paths]
+                result=analyze(*data,window=window,tolerance_ms=tolerance)
+                self.after(0,lambda:finish(result=result))
+            except Exception as exc:self.after(0,lambda error=str(exc):finish(error=error))
+        threading.Thread(target=worker,daemon=True).start()
     def pick_sanitize(self,row):
         if row==0:
             path=filedialog.askopenfilename(filetypes=[('ULog','*.ulg *.ulog'),('所有文件','*.*')])
@@ -605,6 +657,9 @@ class App(tk.Tk):
             self.accuracy_tol.set(str(d.get('accuracy_tol','200')))
             self.sanitize_source.set(d.get('sanitize_source',''))
             self.sanitize_destination.set(d.get('sanitize_destination',''))
+            for v,p in zip(self.relative_paths,d.get('relative_paths',d.get('gps',[]))):v.set(p)
+            self.relative_window.set(str(d.get('relative_window','3')))
+            self.relative_tolerance.set(str(d.get('relative_tolerance','60')))
             # 固定 yaw_diff 与估计开关都不写入历史：启动时固定值为空、估计默认打开。
         except (OSError,ValueError,TypeError,json.JSONDecodeError): pass
     def save_history(self):
@@ -613,7 +668,8 @@ class App(tk.Tk):
            'anchor_boot':self.anchor_boot.get(),'anchor_tow':self.anchor_tow.get(),'eph_path':self.eph_path.get(),
            'cno_gps':[v.get() for v in self.cno_gps],'cno_labels':[v.get() for v in self.cno_labels],'cno_tol':self.cno_tol.get(),
            'accuracy_ref':self.accuracy_ref.get(),'accuracy_gps':[v.get() for v in self.accuracy_gps],'accuracy_tol':self.accuracy_tol.get(),
-           'sanitize_source':self.sanitize_source.get(),'sanitize_destination':self.sanitize_destination.get()}
+           'sanitize_source':self.sanitize_source.get(),'sanitize_destination':self.sanitize_destination.get(),
+           'relative_paths':[v.get() for v in self.relative_paths],'relative_window':self.relative_window.get(),'relative_tolerance':self.relative_tolerance.get()}
         try:
             with open(self.config_path,'w',encoding='utf-8') as f: json.dump(d,f,ensure_ascii=False,indent=2)
         except OSError: pass
