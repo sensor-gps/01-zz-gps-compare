@@ -452,7 +452,7 @@ class App(tk.Tk):
         options=ttk.Frame(self.relative_area);options.grid(row=2,column=0,columnspan=3,sticky='w',padx=8)
         ttk.Label(options,text='滑窗长度(s)').pack(side='left');ttk.Entry(options,textvariable=self.relative_window,width=8).pack(side='left',padx=8)
         ttk.Label(options,text='一对一匹配容差(ms)').pack(side='left');ttk.Entry(options,textvariable=self.relative_tolerance,width=8).pack(side='left',padx=8)
-        ttk.Label(self.relative_area,text='同运动条件下，以居中滑窗二次拟合去除局部运动趋势；默认 3 秒。只使用 fixType=3 有效 PVT。\n绿色表示 GPS2 残差更小，红色表示更大；这是短时去趋势波动指标，不是可分离的绝对测量噪声。\n真实急转、加速度变化、接收机滤波和时延均会影响结果；建议同时检查 2/3/5 秒窗口的结论是否一致。',wraplength=1000).grid(row=3,column=0,columnspan=3,sticky='ew',padx=8,pady=8)
+        ttk.Label(self.relative_area,text='同运动条件下，以居中滑窗二次拟合去除局部运动趋势；默认 3 秒。只使用 fixType=3 有效 PVT。\n绿色表示 GPS2 残差更小，红色表示更大；这是短时去趋势波动指标，不是可分离的绝对测量噪声。\n真实急转、加速度变化、接收机滤波和时延均会影响结果；自动检查多个尺度；只有各尺度同向且差异均超过 5% 才红绿着色，其余灰色。',wraplength=1000).grid(row=3,column=0,columnspan=3,sticky='ew',padx=8,pady=8)
         self.relative_button=ttk.Button(self.relative_area,text='开始相对精度对比',command=self.run_relative)
         self.relative_button.grid(row=4,column=1,sticky='e',pady=8)
         from pylib.relative_accuracy import HEADERS as RELATIVE_HEADERS
