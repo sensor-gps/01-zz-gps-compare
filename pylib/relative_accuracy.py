@@ -62,4 +62,16 @@ def analyze(first,second,window=3.,tolerance_ms=60.):
         writer=csv.writer(stream);writer.writerow(['gps1_itow_ms','gps2_itow_ms']+[f'g{g}_{k}' for g in (1,2) for k in ('vn','ve','vd','pn','pe','pd')])
         for i,index in enumerate(np.flatnonzero(good)):writer.writerow([*pairs[index],*ra[i],*rb[i]])
     summary=f'fix=3 唯一 PVT：GPS1 {len(first)}，GPS2 {len(second)}；一对一匹配 {len(pairs)}，完整窗口统计 {good.sum()} 点。\nGPS1 统计 iTOW：{ta[good][0]*1000:.0f}～{ta[good][-1]*1000:.0f} ms；GPS2：{tb[good][0]*1000:.0f}～{tb[good][-1]*1000:.0f} ms。\n窗口 {window:g} 秒，二次趋势，容差 {tolerance_ms:g} ms。未自动补偿相对时延。\n汇总：{path}\n逐点残差：{detail}\n'
-    return out,summary
+    fields=[]
+    for k,title in enumerate(('速度 N','速度 E','速度 D','位置 N','位置 E','位置 D')):
+        unit='m/s' if k<3 else 'm'
+        fields.extend([(f'raw{k}',title,unit),(f'residual{k}',title+' 去趋势残差',unit)])
+    aligned=[]
+    for times,values,residual in ((ta,va,detrend(ta,va,window)),(tb,vb,detrend(tb,vb,window))):
+        rows=[]
+        for index in np.flatnonzero(good):
+            row={f'raw{k}':values[index,k] for k in range(6)}
+            row.update({f'residual{k}':residual[index,k] for k in range(6)})
+            rows.append((int(round(times[index]*1000)),row))
+        aligned.append(rows)
+    return out,summary,({t:{} for t,_ in aligned[0]},aligned,fields)

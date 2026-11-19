@@ -181,15 +181,15 @@ def align(ref, series, tolerance=200):
             rows.append((t,row))
     return rows
 
-def show_comparison(parent, reference, ref, selected, aligned, labels=None):
+def show_comparison(parent, reference, ref, selected, aligned, labels=None, fields=None, window_title=None):
     from matplotlib.figure import Figure
     from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
     window=tk.Toplevel(parent)
-    window.title('GPS PVT 对比 — 分页查看')
+    window.title(window_title or 'GPS PVT 对比 — 分页查看')
     window.geometry('1200x800')
     ttk.Label(window,text='滚轮：以鼠标位置缩放｜左键：放置垂直光标｜←/→：移动光标｜+/-：缩放｜Home：恢复｜工具栏：平移、框选、保存').pack(fill='x',padx=10,pady=6)
     notebook=ttk.Notebook(window); notebook.pack(fill='both',expand=True)
-    fields=[('lat','纬度','°'),('lon','经度','°'),('alt','海拔高度','m'),
+    fields=fields or [('lat','纬度','°'),('lon','经度','°'),('alt','海拔高度','m'),
             ('vel_n','北向速度','m/s'),('vel_e','东向速度','m/s'),('vel_d','地向速度','m/s'),
             ('speed','地速','m/s'),('heading','航向角','°'),('hacc','水平精度','m'),
             ('vacc','垂直精度','m'),('num_sv','卫星数','颗')]
@@ -205,7 +205,7 @@ def show_comparison(parent, reference, ref, selected, aligned, labels=None):
         curves=[]
         source_times=[]
         if ref is not None:
-            times=np.array(sorted(ref)); curves.append(('FFC 真值',(times-origin)/1000,np.array([ref[t].get(field,np.nan) for t in times])))
+            times=np.array(sorted(ref)); curves.append(('ULog 真值',(times-origin)/1000,np.array([ref[t].get(field,np.nan) for t in times])))
             source_times.append(times)
         for (number,path),rows in zip(selected,aligned):
             curves.append(((labels or {}).get(number) or os.path.basename(path),
@@ -477,8 +477,25 @@ class App(tk.Tk):
         for area in (self.project_area,self.eph_area,self.cno_area,self.accuracy_area,self.sanitize_area,self.relative_area): area.pack_forget()
         area=(self.project_area,self.eph_area,self.cno_area,self.accuracy_area,self.sanitize_area,self.relative_area)[selection[0]]
         area.pack(side='right',fill='both',expand=True,padx=8,pady=8)
+    def clear_previous_results(self):
+        """新任务开始前释放旧图窗并清空结果；不删除磁盘导出文件。"""
+        if any(getattr(self,name,False) for name in ('_running','_cno_running','_accuracy_running','_relative_running','_sanitize_running')):
+            messagebox.showinfo('任务进行中','请等待当前计算完成后再开始新计算。')
+            return False
+        for child in list(self.winfo_children()):
+            if isinstance(child,tk.Toplevel):
+                child.destroy()
+        for name in ('log','cno_log','accuracy_log','relative_log','sanitize_log'):
+            widget=getattr(self,name,None)
+            if widget is not None:widget.delete('1.0','end')
+        for name in ('accuracy_table','relative_table'):
+            widget=getattr(self,name,None)
+            if widget is not None:widget.delete(*widget.get_children())
+        return True
+
     def run_relative(self):
         if getattr(self,'_relative_running',False):return
+        if not self.clear_previous_results():return
         try:
             paths=[v.get().strip() for v in self.relative_paths]
             if not all(paths):raise ValueError('请选择两路 GPS 文件')
@@ -492,6 +509,11 @@ class App(tk.Tk):
                 if error:raise ValueError(error)
                 for values,tag in result[0]:self.relative_table.insert('','end',values=values,tags=(tag,))
                 self.relative_log.insert('end',result[1]);self.relative_log.see('end')
+                plot=result[2]
+                plt.rcParams['font.sans-serif']=['Microsoft YaHei','SimHei','DejaVu Sans']
+                plt.rcParams['axes.unicode_minus']=False
+                show_comparison(self,plot[0],None,[(1,paths[0]),(2,paths[1])],plot[1],
+                                labels={1:'GPS1',2:'GPS2'},fields=plot[2],window_title='GPS 相对精度：原始曲线与去趋势残差')
             except Exception as exc:messagebox.showerror('相对精度对比失败',str(exc))
             finally:self._relative_running=False;self.relative_button.configure(state='normal')
         def worker():
@@ -513,6 +535,7 @@ class App(tk.Tk):
             if path:self.sanitize_destination.set(path)
     def run_sanitize(self):
         if getattr(self,'_sanitize_running',False):return
+        if not self.clear_previous_results():return
         source=self.sanitize_source.get().strip();destination=self.sanitize_destination.get().strip()
         if not source or not destination:
             messagebox.showerror('ULog 脱敏失败','请选择原始文件和输出文件');return
@@ -535,6 +558,7 @@ class App(tk.Tk):
         threading.Thread(target=worker,daemon=True).start()
     def run_accuracy(self):
         if getattr(self,'_accuracy_running',False):return
+        if not self.clear_previous_results():return
         try:
             path=self.accuracy_ref.get().strip()
             if not path.lower().endswith(('.ulg','.ulog')):raise ValueError('请选择 ULog 真值文件')
@@ -550,7 +574,7 @@ class App(tk.Tk):
         self.accuracy_log.delete('1.0','end')
         self.accuracy_log.insert('end',f'正在后台解析并计算动态精度指标……\n时延补偿：{"开启（NE）" if compensate else "关闭"}\n')
         self.accuracy_table.delete(*self.accuracy_table.get_children())
-        def finish(result=None,output=None,error=None):
+        def finish(result=None,output=None,plot=None,error=None):
             try:
                 if error:raise ValueError(error)
                 from pylib.accuracy_analysis import compare,export_comparison
@@ -560,6 +584,10 @@ class App(tk.Tk):
                 compensation='已按各自 NE 时延补偿' if compensate else '未补偿延迟'
                 self.accuracy_log.insert('end',f'绿色：优于 GPS1；红色：劣于 GPS1；灰色：相同或未比较。12 项指标均为误差值，越小越好。\n{compensation}；各 GPS 按自身有效样本统计，样本数详见原始指标 CSV。\n指标 CSV：{output}\n对比 CSV：{comparison_path}\n')
                 self.accuracy_log.see('end')
+                plt.rcParams['font.sans-serif']=['Microsoft YaHei','SimHei','DejaVu Sans']
+                plt.rcParams['axes.unicode_minus']=False
+                show_comparison(self,plot[0],plot[0],selected,plot[1],labels={n:f'GPS {n}' for n,_ in selected},
+                                fields=plot[2],window_title='动态精度：统计时刻的数据曲线对比')
             except Exception as exc:messagebox.showerror('精度评估失败',str(exc))
             finally:self._accuracy_running=False;self.accuracy_button.configure(state='normal')
         def worker():
@@ -577,11 +605,14 @@ class App(tk.Tk):
                                    self.accuracy_log.insert('end',f'GPS {number}: NE 时延={delay:+d} ms（corr={correlation:.5f}），时间戳偏移 {-delay:+d} ms\n'))
                 result=evaluate(series,'dynamic',reference=reference,tolerance=tolerance)
                 output=export(result,'dynamic')
-                self.after(0,lambda:finish(result,output))
+                from pylib.accuracy_analysis import curve_data
+                plot=curve_data(reference,series,tolerance)
+                self.after(0,lambda:finish(result,output,plot))
             except Exception as exc:self.after(0,lambda error=str(exc):finish(error=error))
         threading.Thread(target=worker,daemon=True).start()
     def run_cno(self):
         if getattr(self,'_cno_running',False): return
+        if not self.clear_previous_results():return
         try:
             if plt is None: raise ValueError('请先安装 matplotlib')
             selected=[(i+1,v.get().strip()) for i,v in enumerate(self.cno_gps) if v.get().strip()]
@@ -623,6 +654,7 @@ class App(tk.Tk):
                 self.after(0,lambda error=str(exc):finish(error=error))
         threading.Thread(target=worker,daemon=True).start()
     def run_ephemeris(self):
+        if not self.clear_previous_results():return
         try:
             path=self.eph_path.get().strip()
             if not path: raise ValueError('请选择需要分析的 RTCM 日志文件')
@@ -676,6 +708,7 @@ class App(tk.Tk):
     def on_close(self): self.save_history(); self.destroy()
     def run(self):
         if getattr(self,'_running',False): return
+        if not self.clear_previous_results():return
         self.log.delete('1.0','end')
         self.save_history()
         self._running=True

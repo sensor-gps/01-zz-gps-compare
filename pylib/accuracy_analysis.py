@@ -124,6 +124,40 @@ def trajectory_errors(reference,data,tolerance):
             '轨迹水平':np.linalg.norm(err[:,:2],axis=1),'轨迹三维':np.linalg.norm(err,axis=1)}
 
 
+def curve_data(reference,series,tolerance):
+    """以实际统计误差生成曲线；位置误差沿用去初始偏置及去均值口径。"""
+    aligned=[];truth={}
+    for number,data in series:
+        rt=np.array(sorted(reference),float)
+        rv=np.array([[reference[t].get(k,np.nan) for k in ('vel_n','vel_e','vel_d','pos_n','pos_e','pos_d')] for t in rt])
+        finite=np.isfinite(rv).all(1);rt,rv=rt[finite],rv[finite]
+        gt=np.array(sorted(data),float);j=np.searchsorted(rt,gt)
+        lo=np.clip(j-1,0,len(rt)-1);hi=np.clip(j,0,len(rt)-1)
+        ok=(gt>=rt[0])&(gt<=rt[-1])&(np.minimum(abs(rt[lo]-gt),abs(rt[hi]-gt))<=tolerance)&((rt[hi]-rt[lo])<=2*tolerance)
+        times=gt[ok]
+        if len(times)<2:raise ValueError(f'GPS {number} 的曲线匹配样本不足')
+        rows={int(t):data[t] for t in times};first=rows[int(times[0])]
+        local=static_errors(rows,first['lat'],first['lon'],first['alt'])
+        position=np.column_stack([local[k] for k in ('位置北向','位置东向','位置地向')])
+        q=np.column_stack([np.interp(times,rt,rv[:,k]) for k in range(6)])
+        relative=q[:,3:]-q[0,3:]
+        bias=np.mean((position-relative)[1:],axis=0)
+        output=[]
+        for i,t in enumerate(times):
+            row={k:rows[int(t)][k] for k in ('vel_n','vel_e','vel_d')}
+            row.update({f'position{k}':position[i,k]-bias[k] for k in range(3)})
+            row.update({f'error{k}':row[key]-q[i,k] for k,key in enumerate(('vel_n','vel_e','vel_d'))})
+            row.update({f'position_error{k}':position[i,k]-relative[i,k]-bias[k] if i else np.nan for k in range(3)})
+            # 每路位置原点不同，单独携带对应参考，绘图显示误差页以避免混用原点。
+            output.append((int(t),row))
+            truth[int(t)]={k:q[i,kidx] for kidx,k in enumerate(('vel_n','vel_e','vel_d'))}
+        aligned.append(output)
+    fields=[(k,title,'m/s') for k,title in zip(('vel_n','vel_e','vel_d'),('北向速度','东向速度','地向速度'))]
+    fields += [(f'error{k}',f'{direction} 速度误差','m/s') for k,direction in enumerate(('N','E','D'))]
+    fields += [(f'position_error{k}',f'{direction} 相对位置误差','m') for k,direction in enumerate(('N','E','D'))]
+    return truth,aligned,fields
+
+
 HEADERS=('GPS','指标','单位','样本数','均值/偏差','标准差','RMSE','MAE','绝对误差P50','绝对误差P95','最大绝对误差')
 
 COMPARISON_HEADERS=('指标','单位','GPS1','对比对象','对比值','误差变化','改善比例','结论')
