@@ -6,6 +6,48 @@ import numpy as np
 from .accuracy_analysis import static_errors
 
 HEADERS=('指标','单位','GPS1 残差 RMS','GPS2 残差 RMS','改善比例','结论','差分残差 RMS','有效点数','多尺度改善范围')
+SINGLE_HEADERS=('指标','单位','残差 RMS','残差 STD','绝对残差 P50','绝对残差 P95','最大绝对残差','有效点数','多尺度 RMS 范围')
+
+
+def analyze_single(data,window=3.):
+    """单路自身去趋势；没有对齐、差分或优劣判定。"""
+    if not np.isfinite(window) or not 1<=window<=30:raise ValueError('滑窗长度必须在 1～30 秒之间')
+    if len(data)<30:raise ValueError('有效唯一 PVT 不足 30 个')
+    keys=sorted(data);times=np.array(keys,dtype=float)/1000
+    rows={i:data[t] for i,t in enumerate(keys)};first=rows[0]
+    position=static_errors(rows,first['lat'],first['lon'],first['alt'])
+    values=np.column_stack([[r[k] for r in rows.values()] for k in ('vel_n','vel_e','vel_d')]+[position[k] for k in ('位置北向','位置东向','位置地向')])
+    windows=sorted(set((max(1.,window*2/3),window,min(30.,window*5/3))))
+    residuals={w:detrend(times,values,w) for w in windows}
+    good=np.logical_and.reduce([np.isfinite(r).all(1) for r in residuals.values()])
+    if good.sum()<20:raise ValueError('完整多尺度滑窗有效点不足 20 个')
+    residual=residuals[window];out=[];fields=[];scale_rows=[]
+    for k,title in enumerate(('速度 N','速度 E','速度 D','位置 N','位置 E','位置 D')):
+        unit='m/s' if k<3 else 'm';x=residual[good,k]
+        rms=[float(np.sqrt(np.mean(r[good,k]**2))) for r in residuals.values()]
+        out.append(((title,unit,f'{np.sqrt(np.mean(x*x)):.6g}',f'{np.std(x):.6g}',
+                     f'{np.percentile(abs(x),50):.6g}',f'{np.percentile(abs(x),95):.6g}',
+                     f'{max(abs(x)):.6g}',int(good.sum()),f'{min(rms):.6g}～{max(rms):.6g}'),'neutral'))
+        scale_rows.extend((title,w,int(good.sum()),v) for w,v in zip(windows,rms))
+        fields.extend([(f'raw{k}',title,unit),(f'residual{k}',title+' 去趋势残差',unit)])
+    plot_rows=[]
+    for i in np.flatnonzero(good):
+        row={f'raw{k}':values[i,k] for k in range(6)}
+        row.update({f'residual{k}':residual[i,k] for k in range(6)})
+        plot_rows.append((keys[i],row))
+    directory=Path(__file__).resolve().parent.parent/'analysis_output';directory.mkdir(exist_ok=True)
+    stem='relative_accuracy_single_'+datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+    path=directory/(stem+'.csv')
+    with path.open('w',newline='',encoding='utf-8-sig') as stream:
+        writer=csv.writer(stream);writer.writerow(SINGLE_HEADERS);writer.writerows(row for row,_ in out)
+    detail=directory/(stem+'_residuals.csv')
+    with detail.open('w',newline='',encoding='utf-8-sig') as stream:
+        writer=csv.writer(stream);writer.writerow(['itow_ms']+[f'{prefix}{k}' for prefix in ('raw','residual') for k in range(6)])
+        for t,row in plot_rows:writer.writerow([t,*[row[f'{prefix}{k}'] for prefix in ('raw','residual') for k in range(6)]])
+    with (directory/(stem+'_scales.csv')).open('w',newline='',encoding='utf-8-sig') as stream:
+        writer=csv.writer(stream);writer.writerow(('指标','窗口秒','有效点数','残差RMS'));writer.writerows(scale_rows)
+    summary=f'单 GPS 独立统计，不进行接收机对比或红绿判定。\nfix=3 唯一 PVT {len(data)} 点；多尺度共同有效 {good.sum()} 点。\niTOW：{plot_rows[0][0]}～{plot_rows[-1][0]} ms；主窗口 {window:g} 秒；尺度 {windows}。\n汇总：{path}\n逐点数据：{detail}\n'
+    return out,summary,({t:{} for t,_ in plot_rows},[plot_rows],fields)
 
 
 def detrend(times, values, window):

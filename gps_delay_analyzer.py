@@ -498,10 +498,16 @@ class App(tk.Tk):
         if not self.clear_previous_results():return
         try:
             paths=[v.get().strip() for v in self.relative_paths]
-            if not all(paths):raise ValueError('请选择两路 GPS 文件')
+            selected=[(i+1,path) for i,path in enumerate(paths) if path]
+            if not selected:raise ValueError('请至少选择一路 GPS 文件')
             window=float(self.relative_window.get());tolerance=float(self.relative_tolerance.get())
         except Exception as exc:messagebox.showerror('相对精度对比失败',str(exc));return
         self.save_history();self._relative_running=True;self.relative_button.configure(state='disabled')
+        from pylib.relative_accuracy import HEADERS,SINGLE_HEADERS
+        headers=SINGLE_HEADERS if len(selected)==1 else HEADERS
+        self.relative_table.configure(columns=headers)
+        for key in headers:
+            self.relative_table.heading(key,text=key);self.relative_table.column(key,width=125,anchor='center')
         self.relative_table.delete(*self.relative_table.get_children())
         self.relative_log.delete('1.0','end');self.relative_log.insert('end','正在后台解析和滑窗拟合……\n')
         def finish(result=None,error=None):
@@ -512,15 +518,15 @@ class App(tk.Tk):
                 plot=result[2]
                 plt.rcParams['font.sans-serif']=['Microsoft YaHei','SimHei','DejaVu Sans']
                 plt.rcParams['axes.unicode_minus']=False
-                show_comparison(self,plot[0],None,[(1,paths[0]),(2,paths[1])],plot[1],
-                                labels={1:'GPS1',2:'GPS2'},fields=plot[2],window_title='GPS 相对精度：原始曲线与去趋势残差')
+                show_comparison(self,plot[0],None,selected,plot[1],
+                                labels={n:f'GPS{n}' for n,_ in selected},fields=plot[2],window_title='GPS 独立指标：原始曲线与去趋势残差' if len(selected)==1 else 'GPS 相对精度：原始曲线与去趋势残差')
             except Exception as exc:messagebox.showerror('相对精度对比失败',str(exc))
             finally:self._relative_running=False;self.relative_button.configure(state='normal')
         def worker():
             try:
-                from pylib.relative_accuracy import analyze
-                data=[parse_ubx(path,exact_fix=3) for path in paths]
-                result=analyze(*data,window=window,tolerance_ms=tolerance)
+                from pylib.relative_accuracy import analyze,analyze_single
+                data=[parse_ubx(path,exact_fix=3) for _,path in selected]
+                result=analyze_single(data[0],window=window) if len(selected)==1 else analyze(*data,window=window,tolerance_ms=tolerance)
                 self.after(0,lambda:finish(result=result))
             except Exception as exc:self.after(0,lambda error=str(exc):finish(error=error))
         threading.Thread(target=worker,daemon=True).start()
