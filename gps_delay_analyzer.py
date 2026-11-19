@@ -333,7 +333,7 @@ def show_comparison(parent, reference, ref, selected, aligned, labels=None):
 
 class App(tk.Tk):
     def __init__(self):
-        super().__init__(); self.title('GPS 延迟分析（iTOW/PVT）'); self.geometry('1250x680'); self.items=[]
+        super().__init__(); self.title('GPS 延迟分析（iTOW/PVT）'); self.geometry('1450x850'); self.minsize(1100,700); self.items=[]
         self.config_path=os.path.join(os.path.dirname(os.path.abspath(__file__)),'.gps_delay_history.json')
         left=ttk.Frame(self); left.pack(side='left',fill='y',padx=8,pady=8); right=ttk.Frame(self); right.pack(side='right',fill='both',expand=True,padx=8,pady=8)
         ttk.Label(left,text='分析项目').pack(anchor='w'); self.list=tk.Listbox(left,width=24,height=12); self.list.pack(fill='y',expand=True); self.list.insert(0,'GPS 延迟分析（iTOW/PVT）'); self.list.selection_set(0)
@@ -403,10 +403,16 @@ class App(tk.Tk):
         ttk.Entry(self.accuracy_area,textvariable=self.accuracy_yaw_diff,width=10).grid(row=4,column=3,sticky='w')
         ttk.Checkbutton(self.accuracy_area,text='估计 yaw_diff',variable=self.accuracy_estimate_yaw).grid(row=4,column=4,sticky='w',padx=(8,2))
         ttk.Checkbutton(self.accuracy_area,text='时延补偿(NE)',variable=self.accuracy_compensate).grid(row=4,column=5,sticky='w',padx=(8,2))
-        ttk.Label(self.accuracy_area,text='GPS1 必选，用于建立 ULog 时间映射。按 GPS 独立历元统计。\n默认先逐路估计 GPS 相对真值的 NE 时延并补偿时间戳，再统计精度；取消“时延补偿(NE)”则保留原始时延影响。\n轨迹去除首个共同有效样本的位置偏置，再逐轴扣除平均偏差；结果是相对轨迹误差，不是绝对定位精度。\n固定 yaw_diff 有值时全时段使用该值；留空且勾选“估计 yaw_diff”时由 GPS1 与 drone_fusion 水平速度序列估计固定值；两者都不用时逐时刻自动计算 drone_fusion.yaw − fusion_gps.yaw。实际旋转角均为 −yaw_diff。\n按指定的 12 项位置、速度 RMSE / CEP / STD 指标对比；不绘图。').grid(row=5,column=0,columnspan=6,sticky='w',padx=8,pady=8)
+        accuracy_help=ttk.Label(self.accuracy_area,text='GPS1 必选，用于建立 ULog 时间映射。按 GPS 独立历元统计。\n默认先逐路估计 GPS 相对真值的 NE 时延并补偿时间戳，再统计精度；取消“时延补偿(NE)”则保留原始时延影响。\n轨迹去除首个共同有效样本的位置偏置，再逐轴扣除平均偏差；结果是相对轨迹误差，不是绝对定位精度。\n固定 yaw_diff 有值时全时段使用该值；留空且勾选“估计 yaw_diff”时由 GPS1 与 drone_fusion 水平速度序列估计固定值；两者都不用时逐时刻自动计算 drone_fusion.yaw − fusion_gps.yaw。实际旋转角均为 −yaw_diff。\n按指定的 12 项位置、速度 RMSE / CEP / STD 指标对比，同时绘制补偿后的速度和位置曲线。',wraplength=1250,justify='left')
+        accuracy_help.grid(row=5,column=0,columnspan=6,sticky='ew',padx=8,pady=8)
         self.accuracy_button=ttk.Button(self.accuracy_area,text='开始精度评估并导出指标',command=self.run_accuracy)
         self.accuracy_button.grid(row=6,column=1,sticky='e')
-        self.accuracy_log=tk.Text(self.accuracy_area,height=4);self.accuracy_log.grid(row=7,column=0,columnspan=3,sticky='ew')
+        accuracy_log_frame=ttk.Frame(self.accuracy_area)
+        accuracy_log_frame.grid(row=7,column=0,columnspan=6,sticky='nsew',padx=8,pady=(4,6))
+        self.accuracy_log=tk.Text(accuracy_log_frame,height=8,wrap='word',font=('Consolas',10))
+        accuracy_log_scroll=ttk.Scrollbar(accuracy_log_frame,orient='vertical',command=self.accuracy_log.yview)
+        self.accuracy_log.configure(yscrollcommand=accuracy_log_scroll.set)
+        self.accuracy_log.pack(side='left',fill='both',expand=True);accuracy_log_scroll.pack(side='right',fill='y')
         from pylib.accuracy_analysis import COMPARISON_HEADERS
         self.accuracy_table=ttk.Treeview(self.accuracy_area,columns=COMPARISON_HEADERS,show='headings',height=15)
         for key in COMPARISON_HEADERS:
@@ -414,10 +420,12 @@ class App(tk.Tk):
         self.accuracy_table.tag_configure('better',foreground='#137333',background='#e6f4ea')
         self.accuracy_table.tag_configure('worse',foreground='#b3261e',background='#fce8e6')
         self.accuracy_table.tag_configure('neutral',foreground='#555555')
-        self.accuracy_table.grid(row=8,column=0,columnspan=3,sticky='nsew')
+        self.accuracy_table.grid(row=8,column=0,columnspan=5,sticky='nsew',padx=(8,0))
         scroll=ttk.Scrollbar(self.accuracy_area,orient='vertical',command=self.accuracy_table.yview)
-        scroll.grid(row=8,column=3,sticky='ns');self.accuracy_table.configure(yscrollcommand=scroll.set)
-        self.accuracy_area.columnconfigure(1,weight=1);self.accuracy_area.rowconfigure(8,weight=1)
+        scroll.grid(row=8,column=5,sticky='ns');self.accuracy_table.configure(yscrollcommand=scroll.set)
+        table_hscroll=ttk.Scrollbar(self.accuracy_area,orient='horizontal',command=self.accuracy_table.xview)
+        table_hscroll.grid(row=9,column=0,columnspan=5,sticky='ew',padx=(8,0));self.accuracy_table.configure(xscrollcommand=table_hscroll.set)
+        self.accuracy_area.columnconfigure(1,weight=1);self.accuracy_area.rowconfigure(8,weight=1);self.accuracy_area.rowconfigure(7,weight=0)
         self.list.insert('end','ULog 脱敏')
         self.sanitize_area=ttk.Frame(self)
         self.sanitize_source=tk.StringVar();self.sanitize_destination=tk.StringVar()
@@ -499,6 +507,7 @@ class App(tk.Tk):
                 comparison_path=export_comparison(result)
                 compensation='已按各自 NE 时延补偿' if compensate else '未补偿延迟'
                 self.accuracy_log.insert('end',f'绿色：优于 GPS1；红色：劣于 GPS1；灰色：相同或未比较。12 项指标均为误差值，越小越好。\n{compensation}；各 GPS 按自身有效样本统计，样本数详见原始指标 CSV。\n指标 CSV：{output}\n对比 CSV：{comparison_path}\n')
+                self.accuracy_log.see('end')
             except Exception as exc:messagebox.showerror('精度评估失败',str(exc))
             finally:self._accuracy_running=False;self.accuracy_button.configure(state='normal')
         def worker():
