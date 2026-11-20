@@ -217,3 +217,7 @@ GPS 2 相对 GPS 1: 北东联合速度延迟=230 ms, 相关系数=0.99800
 | 均匀网格与间隙限制插值 | `pylib/gps_timing.py` → `_uniform_grid` / `interpolate_with_gap` |
 | NE 联合延迟 | `pylib/gps_timing.py` → `estimate_delay` |
 | 单通道延迟与 RMSE | `pylib/gps_timing.py` → `estimate_channel_delay` |
+
+## 按光标区间重算
+
+曲线窗口中 A、B 光标显示相对时间和区间长度。放置 A、B 后点击“按 A-B 光标区间重算指标”，会按该相对时间段关闭旧结果并重算主界面的指标，随后打开新的曲线窗口。该功能适用于延迟分析和两路/单路相对精度项目；区间选择只影响本次运行，不删除历史导出文件。

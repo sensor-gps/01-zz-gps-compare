@@ -181,13 +181,17 @@ def align(ref, series, tolerance=200):
             rows.append((t,row))
     return rows
 
-def show_comparison(parent, reference, ref, selected, aligned, labels=None, fields=None, window_title=None):
+def show_comparison(parent, reference, ref, selected, aligned, labels=None, fields=None, window_title=None, interval_callback=None):
     from matplotlib.figure import Figure
     from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
     window=tk.Toplevel(parent)
     window.title(window_title or 'GPS PVT 对比 — 分页查看')
     window.geometry('1200x800')
-    ttk.Label(window,text='滚轮：以鼠标位置缩放｜左键：放置垂直光标｜←/→：移动光标｜+/-：缩放｜Home：恢复｜工具栏：平移、框选、保存').pack(fill='x',padx=10,pady=6)
+    toolbar_text='滚轮：以鼠标位置缩放｜左键：放置垂直光标｜←/→：移动光标｜+/-：缩放｜Home：恢复｜工具栏：平移、框选、保存'
+    ttk.Label(window,text=toolbar_text).pack(fill='x',padx=10,pady=4)
+    window._interval_states=[]
+    if interval_callback is not None:
+        ttk.Button(window,text='按 A-B 光标区间重算指标',command=lambda:interval_callback(window._interval_states[notebook.index(notebook.select())] if window._interval_states else None)).pack(anchor='e',padx=10,pady=(0,4))
     notebook=ttk.Notebook(window); notebook.pack(fill='both',expand=True)
     fields=fields or [('lat','纬度','°'),('lon','经度','°'),('alt','海拔高度','m'),
             ('vel_n','北向速度','m/s'),('vel_e','东向速度','m/s'),('vel_d','地向速度','m/s'),
@@ -238,6 +242,7 @@ def show_comparison(parent, reference, ref, selected, aligned, labels=None, fiel
         box=Rectangle((0,0),0,0,fill=False,edgecolor='gray',linestyle='--',visible=False)
         ax.add_patch(box)
         state={'times':[None,None],'active':0,'annotations':[],'drag':None}
+        window._interval_states.append(state)
         def place(t,slot=None,ax=ax,canvas=canvas,cursors=cursors,state=state,curves=curves,readout=readout,unit=unit,source_times=source_times,has_ref=ref is not None):
             if slot is None: slot=state['active']
             state['times'][slot]=t
@@ -247,7 +252,7 @@ def show_comparison(parent, reference, ref, selected, aligned, labels=None, fiel
                 cursors[k].set_visible(time is not None)
                 if time is not None: cursors[k].set_xdata([time,time])
             ta,tb=state['times']; lines=[]
-            if ta is not None and tb is not None: lines.append(f'A={ta:.6f} s    B={tb:.6f} s    Δt (B−A)={tb-ta:.6f} s')
+            if ta is not None and tb is not None: lines.append(f'A 相对时间={ta:.6f} s    B 相对时间={tb:.6f} s    区间长度={abs(tb-ta):.6f} s')
             else: lines.append('右键依次放置 A、B 光标；左键按住光标线可拖动；按 A/B 选择光标')
             for row,(name,x,y) in enumerate(curves):
                 vals=[]
@@ -493,7 +498,7 @@ class App(tk.Tk):
             if widget is not None:widget.delete(*widget.get_children())
         return True
 
-    def run_relative(self):
+    def run_relative(self, interval=None):
         if getattr(self,'_relative_running',False):return
         if not self.clear_previous_results():return
         try:
@@ -518,14 +523,21 @@ class App(tk.Tk):
                 plot=result[2]
                 plt.rcParams['font.sans-serif']=['Microsoft YaHei','SimHei','DejaVu Sans']
                 plt.rcParams['axes.unicode_minus']=False
+                def recalc(state):
+                    if state is None or None in state['times']:
+                        messagebox.showinfo('区间重算','请先在同一曲线页放置 A、B 两个光标。');return
+                    lo,hi=sorted(state['times']);self.run_relative(interval=(lo,hi))
                 show_comparison(self,plot[0],None,selected,plot[1],
-                                labels={n:f'GPS{n}' for n,_ in selected},fields=plot[2],window_title='GPS 独立指标：原始曲线与去趋势残差' if len(selected)==1 else 'GPS 相对精度：原始曲线与去趋势残差')
+                                labels={n:f'GPS{n}' for n,_ in selected},fields=plot[2],window_title='GPS 独立指标：原始曲线与去趋势残差' if len(selected)==1 else 'GPS 相对精度：原始曲线与去趋势残差',interval_callback=recalc)
             except Exception as exc:messagebox.showerror('相对精度对比失败',str(exc))
             finally:self._relative_running=False;self.relative_button.configure(state='normal')
         def worker():
             try:
                 from pylib.relative_accuracy import analyze,analyze_single
                 data=[parse_ubx(path,exact_fix=3) for _,path in selected]
+                if interval is not None:
+                    origin=min(min(d) for d in data)
+                    data=[{t:r for t,r in d.items() if interval[0]*1000 <= t-origin <= interval[1]*1000} for d in data]
                 result=analyze_single(data[0],window=window) if len(selected)==1 else analyze(*data,window=window,tolerance_ms=tolerance)
                 self.after(0,lambda:finish(result=result))
             except Exception as exc:self.after(0,lambda error=str(exc):finish(error=error))
@@ -712,15 +724,15 @@ class App(tk.Tk):
             with open(self.config_path,'w',encoding='utf-8') as f: json.dump(d,f,ensure_ascii=False,indent=2)
         except OSError: pass
     def on_close(self): self.save_history(); self.destroy()
-    def run(self):
+    def run(self, interval=None):
         if getattr(self,'_running',False): return
         if not self.clear_previous_results():return
         self.log.delete('1.0','end')
         self.save_history()
         self._running=True
         self.log.insert('end','正在后台解析文件，请稍候，界面仍可响应……\n')
-        threading.Thread(target=self._run,daemon=True).start()
-    def _run(self):
+        threading.Thread(target=lambda:self._run(interval),daemon=True).start()
+    def _run(self, interval=None):
         try:
             if plt is None: raise RuntimeError('请先安装 matplotlib：pip install matplotlib')
             ref_path=self.ref.get().strip()
@@ -743,6 +755,13 @@ class App(tk.Tk):
                 self.after(0,lambda rotation=rotation:self.log.insert('end',f'ULog sensor_gps -> GPS1 PVT identity clock mapping; GPS2/3 share iTOW. 旋转方式：{rotation}\n'))
             reference=ref if ref is not None else gps[0]
             if not reference: raise RuntimeError('参考文件中没有可分析的数据')
+            if interval is not None:
+                origin=min(reference)
+                lo,hi=interval
+                reference={t:r for t,r in reference.items() if lo*1000 <= t-origin <= hi*1000}
+                gps=[{t:r for t,r in data.items() if lo*1000 <= t-origin <= hi*1000} for data in gps]
+                if not reference or any(not data for data in gps):raise ValueError('所选 A-B 区间内没有足够数据')
+                if ref is not None: ref=reference
             tol=float(self.tol.get())
             if not np.isfinite(tol) or tol<0: raise ValueError('对齐容差必须是非负有限数值')
             aligned=[align(reference,x,tol) for x in gps]
@@ -775,7 +794,11 @@ class App(tk.Tk):
                 self.after(0,lambda number=number,data=data,rows=rows: self.log.insert('end',f'GPS {number}：{len(data)} 点，匹配 {len(rows)} 点\n'))
             plt.rcParams['font.sans-serif']=['Microsoft YaHei','SimHei','DejaVu Sans']
             plt.rcParams['axes.unicode_minus']=False
-            self.after(0,lambda: show_comparison(self,reference,ref,selected,aligned,labels=labels))
+            def recalc(state):
+                if state is None or None in state['times']:
+                    messagebox.showinfo('区间重算','请先在同一曲线页放置 A、B 两个光标。');return
+                lo,hi=sorted(state['times']);self.run(interval=(lo,hi))
+            self.after(0,lambda: show_comparison(self,reference,ref,selected,aligned,labels=labels,interval_callback=recalc))
         except Exception as e:
             # Python 会在离开 except 块时清理异常变量 e，不能在稍后执行的
             # Tkinter lambda 中直接引用它；先复制成普通字符串。
